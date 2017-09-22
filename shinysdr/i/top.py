@@ -1,17 +1,17 @@
 # Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
-# 
+#
 # This file is part of ShinySDR.
-# 
+#
 # ShinySDR is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # ShinySDR is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -46,15 +46,15 @@ class ReceiverCollection(CollectionState):
     def __init__(self, table, top):
         CollectionState.__init__(self, table)
         self.__top = top
-    
+
     def state_insert(self, key, desc):
         self.__top.add_receiver(mode=desc['mode'], key=key, state=desc)
-    
+
     def create_child(self, desc):
         (key, receiver) = self.__top.add_receiver(desc['mode'])
         receiver.state_from_json(desc)
         return key
-        
+
     def delete_child(self, key):
         self.__top.delete_receiver(key)
 
@@ -69,7 +69,7 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
         # pylint: disable=dangerous-default-value
         if len(devices) <= 0:
             raise ValueError('Must have at least one RF device')
-        
+
         gr.top_block.__init__(self, "SDR top block")
         self.__running = False  # duplicate of GR state we can't reach, see __start_or_stop
         self.__has_a_useful_receiver = False
@@ -83,7 +83,7 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
             self.source_name = key
             break
         self.__rx_device_type = EnumT({k: v.get_name() or k for (k, v) in self._sources.iteritems()})
-        
+
         # Audio early setup
         self.__audio_manager = AudioManager(  # must be before contexts
             graph=self,
@@ -100,40 +100,40 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
             context=Context(self))
         self.monitor.get_interested_cell().subscribe2(self.__start_or_stop_later, the_subscription_context)
         self.__clip_probe = MaxProbe()
-        
+
         # Receiver blocks (multiple, eventually)
         self._receivers = CellDict(dynamic=True)
         self._receiver_valid = {}
-        
+
         # collections
         # TODO: No longer necessary to have these non-underscore names
         self.sources = CollectionState(CellDict(self._sources))
         self.receivers = ReceiverCollection(self._receivers, self)
         self.accessories = CollectionState(CellDict(accessories))
         self.__telemetry_store = TelemetryStore()
-        
+
         # Flags, other state
         self.__needs_reconnect = [u'initialization']
         self.__in_reconnect = False
         self.receiver_key_counter = 0
         self.receiver_default_state = {}
         self.__cpu_calculator = LazyRateCalculator(lambda: time.clock())
-        
+
         # Initialization
-        
+
         def hookup_vfo_callback(k, d):  # function so as to not close over loop variable
             d.get_vfo_cell().subscribe2(lambda value: self.__device_vfo_callback(k), the_subscription_context)
-        
+
         for k, d in devices.iteritems():
             hookup_vfo_callback(k, d)
-        
+
         self._do_connect()
 
     def add_receiver(self, mode, key=None, state=None):
         if len(self._receivers) >= 100:
             # Prevent storage-usage DoS attack
             raise Exception('Refusing to create more than 100 receivers')
-        
+
         if key is not None:
             assert key not in self._receivers
         else:
@@ -142,20 +142,20 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
                 self.receiver_key_counter += 1
                 if key not in self._receivers:
                     break
-        
+
         if len(self._receivers) > 0:
             arbitrary = self._receivers.itervalues().next()
             defaults = arbitrary.state_to_json()
         else:
             defaults = self.receiver_default_state
-            
+
         combined_state = defaults.copy()
         for do_not_use_default in ['device_name', 'freq_linked_to_device']:
             if do_not_use_default in combined_state:
                 del combined_state[do_not_use_default]
         if state is not None:
             combined_state.update(state)
-        
+
         facet = ContextForReceiver(self, key)
         receiver = unserialize_exported_state(Receiver, kwargs=dict(
             mode=mode,
@@ -167,23 +167,23 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
         facet._receiver = receiver
         self._receivers[key] = receiver
         self._receiver_valid[key] = False
-        
+
         self.__needs_reconnect.append(u'added receiver ' + key)
         self._do_connect()
 
         # until _enabled, the facet ignores any reconnect/rebuild-triggering callbacks
         facet._enabled = True
-        
+
         return (key, receiver)
 
     def delete_receiver(self, key):
         assert key in self._receivers
         receiver = self._receivers[key]
-        
+
         # save defaults for use if about to become empty
         if len(self._receivers) == 1:
             self.receiver_default_state = receiver.state_to_json()
-        
+
         del self._receivers[key]
         del self._receiver_valid[key]
         self.__needs_reconnect.append(u'removed receiver ' + key)
@@ -195,13 +195,13 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
         self.__needs_reconnect.append(u'added audio queue')
         self._do_connect()
         self.__start_or_stop()
-    
+
     def remove_audio_queue(self, queue):
         self.__audio_manager.remove_audio_queue(queue)
         self.__start_or_stop()
         self.__needs_reconnect.append(u'removed audio queue')
         self._do_connect()
-    
+
     def get_audio_queue_channels(self):
         """
         Return the number of channels (which will be 1 or 2) in audio queue outputs.
@@ -214,14 +214,14 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
         if self.__in_reconnect:
             raise Exception('reentrant reconnect or _do_connect crashed')
         self.__in_reconnect = True
-        
+
         t0 = time.time()
         if self.source is not self._sources[self.source_name]:
             log.msg('Flow graph: Switching RF device to %s' % (self.source_name))
             self.__needs_reconnect.append(u'switched device')
 
             this_source = self._sources[self.source_name]
-            
+
             self.source = this_source
             self.state_changed('source')
             self.__monitor_rx_driver = this_source.get_rx_driver()
@@ -229,14 +229,14 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
             self.monitor.set_signal_type(monitor_signal_type)
             self.monitor.set_input_center_freq(this_source.get_freq())
             self.__clip_probe.set_window_and_reconnect(0.5 * monitor_signal_type.get_sample_rate())
-        
+
         if self.__needs_reconnect:
             log.msg(u'Flow graph: Rebuilding connections because: %s' % (', '.join(self.__needs_reconnect),))
             self.__needs_reconnect = []
-            
+
             self._recursive_lock()
             self.disconnect_all()
-            
+
             self.connect(
                 self.__monitor_rx_driver,
                 self.monitor)
@@ -271,16 +271,16 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
                 else:
                     assert receiver_output_type.get_kind() == 'STEREO'
                     audio_rs.input(receiver, receiver_output_type.get_sample_rate(), receiver.get_audio_destination())
-            
+
             self.__has_a_useful_receiver = audio_rs.finish_bus_connections() or \
                 has_non_audio_receiver
-            
+
             self._recursive_unlock()
             # (this is in an if block but it can't not execute if anything else did)
             log.msg('Flow graph: ...done reconnecting (%i ms).' % ((time.time() - t0) * 1000,))
-            
+
             self.__start_or_stop_later()
-        
+
         self.__in_reconnect = False
 
     def __device_vfo_callback(self, device_key):
@@ -305,38 +305,38 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
         if receiver.get_is_valid() != self._receiver_valid[key]:
             self.__needs_reconnect.append(u'receiver %s validity changed' % (key,))
             self._do_connect()
-    
+
     @exported_value(type=ReferenceT(), changes='never')
     def get_monitor(self):
         return self.monitor
-    
+
     @exported_value(type=ReferenceT(), persists=False, changes='never')
     def get_sources(self):
         return self.sources
-    
+
     @exported_value(type=ReferenceT(), persists=False, changes='explicit')
     def get_source(self):
         return self.source  # TODO no need for this now...?
-    
+
     @exported_value(type=ReferenceT(), changes='never')
     def get_receivers(self):
         return self.receivers
-    
+
     # TODO the concept of 'accessories' is old and needs to go away, but we don't have a flexible enough UI to replace it with just devices since only one device can be looked-at at a time so far.
     @exported_value(type=ReferenceT(), persists=False, changes='never')
     def get_accessories(self):
         return self.accessories
-    
+
     @exported_value(type=ReferenceT(), changes='never', label='Telemetry')
     def get_telemetry_store(self):
         return self.__telemetry_store
-    
+
     def start(self, **kwargs):
         # pylint: disable=arguments-differ
         # trigger reconnect/restart notification
         self._recursive_lock()
         self._recursive_unlock()
-        
+
         super(Top, self).start(**kwargs)
         self.__running = True
 
@@ -368,7 +368,7 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
 
     def close_all_devices(self):
         """Close all devices in preparation for a clean shutdown.
-        
+
         Makes this top block unusable"""
         for device in self._sources.itervalues():
             device.close()
@@ -383,7 +383,7 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
         label='RF source')
     def get_source_name(self):
         return self.source_name
-    
+
     @setter
     def set_source_name(self, value):
         if value == self.source_name:
@@ -392,33 +392,33 @@ class Top(gr.top_block, ExportedState, RecursiveLockBlockMixin):
             raise ValueError('Source %r does not exist' % (value,))
         self.source_name = value
         self._do_connect()
-    
+
     @exported_value(type=NoticeT(always_visible=False), changes='continuous')
     def get_clip_warning(self):
         level = self.__clip_probe.level()
         # We assume that our sample source's absolute limits on I and Q values are the range -1.0 to 1.0. This is a square region; therefore the magnitude observed can be up to sqrt(2) = 1.414 above this, allowing us some opportunity to measure the amount of excess, and also to detect clipping even if the device doesn't produce exactly +-1.0 valus.
-        if level >= 1.0:
+        if level >= 1.0 and level <= 1.414: # math.sqrt(level):
             return u'Input amplitude too high (%.2f \u2265 1.0). Reduce gain.' % math.sqrt(level)
         else:
             return u''
-    
+
     # TODO: This becomes useless w/ Session fix
     @exported_value(type=float, changes='continuous')
     def get_cpu_use(self):
         return round(self.__cpu_calculator.get(), 2)
-    
+
     def _get_rx_device_type(self):
         """for ContextForReceiver only"""
         return self.__rx_device_type
-    
+
     def _get_audio_destination_type(self):
         """for ContextForReceiver only"""
         return self.__audio_manager.get_destination_type()
-    
+
     def _trigger_reconnect(self, reason):
         self.__needs_reconnect.append(reason)
         self._do_connect()
-    
+
     def _recursive_lock_hook(self):
         for source in self._sources.itervalues():
             source.notify_reconnecting_or_restarting()
@@ -481,7 +481,7 @@ class ContextForReceiver(Context):
             # TODO write justification here that this won't be dangerously reentrant
             device.set_freq(freq)
             # TODO: It would also make sense to switch sources here, if the receiver is more-in-range for the other source.
-            
+
             # No need to _update_receiver_validity here because tuning will do that with fewer reconnects.
         else:
             self.__top._update_receiver_validity(self._key)
@@ -489,7 +489,7 @@ class ContextForReceiver(Context):
     def changed_needed_connections(self, reason):
         if self._enabled:
             self.__top._trigger_reconnect(u'receiver %s: %s' % (self._key, reason))
-    
+
     def output_message(self, message):
         self.__top.get_telemetry_store().receive(message)
 
@@ -497,7 +497,7 @@ class ContextForReceiver(Context):
 def _find_in_usable_bandwidth(usable_bandwidth_range, receiver):
     """Given the usable_bandwidth_range of a device and a receiver, find where we can place the receiver in the range (all relative frequencies)."""
     shape = receiver.get_demodulator().get_band_shape()
-    
+
     # We assume that the bandwidth range is generally wide-open with a possible gap in the middle.
     # TODO: It would make more sense to directly ask RangeT to tell us where an interval will fit, rather than making that assumption.
     least_positive = usable_bandwidth_range(0, range_round_direction=+1)
@@ -507,7 +507,7 @@ def _find_in_usable_bandwidth(usable_bandwidth_range, receiver):
         if _DEBUG_RETUNE:
             print '--- no offset'
         return 0.0
-    
+
     offset_positive = least_positive - shape.stop_low
     offset_negative = greatest_negative - shape.stop_high
     if _DEBUG_RETUNE:
@@ -533,12 +533,12 @@ class MaxProbe(gr.hier_block2):
             gr.io_signature(0, 0, 0))
         self.__sink = None  # quiet pylint
         self.set_window_and_reconnect(window)
-    
+
     def level(self):
         # pylint: disable=method-hidden, no-self-use
         # overridden in instances
         raise Exception('This placeholder should never get called')
-    
+
     def set_window_and_reconnect(self, window):
         """
         Must be called while the flowgraph is locked already.
@@ -553,7 +553,7 @@ class MaxProbe(gr.hier_block2):
             blocks.stream_to_vector(itemsize=gr.sizeof_float, nitems_per_block=window),
             blocks.max_ff(window),
             self.__sink)
-        
+
         # shortcut method implementation
         self.level = self.__sink.level
 
