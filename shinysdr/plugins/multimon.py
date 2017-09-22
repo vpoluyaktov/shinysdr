@@ -1,17 +1,17 @@
 # Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
 #
 # This file is part of ShinySDR.
-# 
+#
 # ShinySDR is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # ShinySDR is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -51,14 +51,14 @@ int_scale = _maxint32 * audio_gain
 
 class MultimonNGDemodulator(gr.hier_block2, ExportedState):
     # This is not an IDemodulator; it takes float input, requires a fixed input rate and lacks other characteristics.
-    
+
     def __init__(self, protocol, context, multimon_demod_args):
         gr.hier_block2.__init__(
             self, '%s(%r, %r)' % (type(self).__name__, multimon_demod_args, protocol),
             gr.io_signature(1, 1, gr.sizeof_float * 1),
             gr.io_signature(1, 1, gr.sizeof_float * 1),
         )
-        
+
         # Subprocess
         # using /usr/bin/env because twisted spawnProcess doesn't support path search
         process = reactor.spawnProcess(
@@ -72,7 +72,7 @@ class MultimonNGDemodulator(gr.hier_block2, ExportedState):
                 2: 2
             })
         sink = make_sink_to_process_stdin(process, itemsize=gr.sizeof_short)
-        
+
         # Output
         to_short = blocks.float_to_short(vlen=1, scale=int_scale)
         self.connect(
@@ -84,10 +84,10 @@ class MultimonNGDemodulator(gr.hier_block2, ExportedState):
         unconverter = blocks.short_to_float(vlen=1, scale=int_scale)
         self.connect(to_short, unconverter)
         self.connect(unconverter, self)
-        
+
     def get_input_type(self):
         return SignalType(kind='MONO', sample_rate=pipe_rate)
-    
+
     def get_output_type(self):
         return SignalType(kind='MONO', sample_rate=pipe_rate)
 
@@ -108,19 +108,19 @@ class APRSDemodulator(gr.hier_block2, ExportedState):
             gr.io_signature(1, 1, gr.sizeof_float * 1),
             gr.io_signature(1, 1, gr.sizeof_float * 1),
         )
-        
+
         def receive(line):
             # %r here provides robustness against arbitrary bytes.
             log.msg(u'APRS: %r' % (line,))
             message = parse_tnc2(line, time.time())
             log.msg(u'   -> %s' % (message,))
             context.output_message(message)
-        
+
         self.__mm_demod = MultimonNGDemodulator(
             multimon_demod_args=['-A'],
             protocol=APRSProcessProtocol(receive),
             context=context)
-        
+
         # APRS Voice Alert squelch -- see http://www.aprs.org/VoiceAlert3.html
         self.__squelch_mode = None
         self.__squelch_block = analog.ctcss_squelch_ff(
@@ -132,7 +132,7 @@ class APRSDemodulator(gr.hier_block2, ExportedState):
             gate=False)
         self.__router = blocks.multiply_matrix_ff([[0, 0]])
         self.set_squelch(u'ctcss')
-        
+
         self.connect(
             self,
             self.__mm_demod,
@@ -140,20 +140,20 @@ class APRSDemodulator(gr.hier_block2, ExportedState):
             self.__router,
             self)
         self.connect(self.__mm_demod, (self.__router, 1))
-    
+
     def get_input_type(self):
         return self.__mm_demod.get_input_type()
-    
+
     def get_output_type(self):
         return self.__mm_demod.get_output_type()
-    
+
     @exported_value(
         type=_aprs_squelch_type,
         changes='this_setter',
         label='APRS squelch mode')
     def get_squelch(self):
         return self.__squelch_mode
-    
+
     @setter
     def set_squelch(self, value):
         value = _aprs_squelch_type(value)
@@ -183,7 +183,7 @@ class FMAPRSDemodulator(gr.hier_block2, ExportedState):
         )
         self.mode = mode
         self.input_rate = input_rate
-        
+
         # FM demod
         # TODO: Retry telling the NFMDemodulator to have its output rate be pipe_rate instead of using a resampler. Something went wrong when trying that before. Same thing is done in dsd.py
         self.fm_demod = NFMDemodulator(
@@ -193,11 +193,11 @@ class FMAPRSDemodulator(gr.hier_block2, ExportedState):
             tau=None)  # no deemphasis
         assert self.fm_demod.get_output_type().get_kind() == 'MONO'
         fm_audio_rate = self.fm_demod.get_output_type().get_sample_rate()
-        
+
         # Subprocess
         self.mm_demod = APRSDemodulator(context=context)
         mm_audio_rate = self.mm_demod.get_input_type().get_sample_rate()
-        
+
         # Output
         self.connect(
             self,
@@ -205,14 +205,14 @@ class FMAPRSDemodulator(gr.hier_block2, ExportedState):
             make_resampler(fm_audio_rate, mm_audio_rate),
             self.mm_demod,
             self)
-    
+
     @exported_value(type=BandShape, changes='never')
     def get_band_shape(self):
         return self.fm_demod.get_band_shape()
-    
+
     def get_output_type(self):
         return self.mm_demod.get_output_type()
-    
+
     @exported_value(type=ReferenceT(), changes='never')
     def get_mm_demod(self):
         return self.mm_demod
@@ -225,15 +225,15 @@ class APRSProcessProtocol(ProcessProtocol):
         self.__line_receiver.delimiter = '\n'
         self.__line_receiver.lineReceived = self.__lineReceived
         self.__last_line = None
-    
+
     def outReceived(self, data):
         # split lines
         self.__line_receiver.dataReceived(data)
-        
+
     def errReceived(self, data):
         # we should inherit stderr, not pipe it
         raise Exception('shouldn\'t happen')
-    
+
     def __lineReceived(self, line):
         if line == '':  # observed glitch in output
             pass
@@ -253,7 +253,7 @@ class APRSProcessProtocol(ProcessProtocol):
 
 
 # TODO: Arrange for a way for the user to see why it is unavailable.
-_multimon_available = test_subprocess('multimon-ng -h; exit 0', 'available demodulators:', shell=True)
+_multimon_available = test_subprocess('multimon-ng -h; exit 0', 'Available demodulators:', shell=True)
 
 
 pluginDef_APRS = ModeDef(mode='APRS',  # TODO: Rename mode to be more accurate
