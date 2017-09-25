@@ -113,7 +113,7 @@ define([
         };
       };
 
-      function handleReshape() {
+      config.scheduler.startNow(function handleReshape() {
         block._reshapeNotice.listen(handleReshape);
         Object.keys(block).forEach(name => {
           if (!childWidgetElements[name]) {
@@ -127,9 +127,7 @@ define([
             delete childWidgetElements[oldName];
           }
         }
-      }
-      handleReshape.scheduler = config.scheduler;
-      handleReshape();
+      });
     };
   }
   exports.BlockSet = BlockSet;
@@ -245,25 +243,20 @@ define([
             cell.set(value);
           }
         }
-        function bindGainModeSet() {
+        config.scheduler.startNow(function bindGainModeSet() {
           const mode = gainModeCell.depend(bindGainModeSet);
           if (hasAGC) {
             setIfDifferent(block.agc, mode === 'auto');
           }
-        }
-        bindGainModeSet.scheduler = config.scheduler;
-        bindGainModeSet();
-        function bindGainModeGet() {
+        });
+        config.scheduler.startNow(function bindGainModeGet() {
           if (hasAGC && block.agc.depend(bindGainModeGet)) {
             setIfDifferent(gainModeCell, 'auto');
           } else if (gainModeCell.get() === 'auto') {
             setIfDifferent(gainModeCell, 'single');
           }
-        }
-        bindGainModeGet.scheduler = config.scheduler;
-        bindGainModeGet();
-
-        function updateUI() {
+        });
+        config.scheduler.startNow(function updateUI() {
           var mode = gainModeCell.depend(updateUI);
           if (hasSingleGain) {
             singleGainPanel.style.display = mode === 'single' ? 'block' : 'none';
@@ -271,9 +264,7 @@ define([
           if (hasMultipleGain) {
             multipleGainPanel.style.display = mode === 'stages' ? 'block' : 'none';
           }
-        }
-        updateUI.scheduler = config.scheduler;
-        updateUI();
+        });
       }());
       
       setToDetails();
@@ -472,7 +463,7 @@ define([
         throw new Error('wrong element ' + element.nodeName);
       }
       
-      const update = config.boundedFn(function updateImpl() {
+      config.scheduler.startNow(function update() {
         let themeUrl = target.depend(update);
         // If value is not valid take a valid one
         // TODO: implement client side coercion and remove this instanceof
@@ -481,8 +472,6 @@ define([
         }
         element.href = themeUrl;
       });
-      update.scheduler = config.scheduler;
-      update();
     }
   }
   exports.ThemeApplier = ThemeApplier;

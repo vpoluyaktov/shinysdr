@@ -25,27 +25,52 @@ define([
   import_events
 ) => {
   const {ji: {
+    beforeEach,
     describe,
     expect,
     it,
     jasmine
   }} = import_jasmine;
   const {
-    Scheduler
+    Scheduler,
+    SubScheduler,
   } = import_events;
   
   describe('events', () => {
-    describe('Scheduler', () => {
+    function itIsAScheduler(factory) {
+      describe('startNow', () => {
+        it('should do that', () => {
+          const scheduler = factory();
+          const cb = jasmine.createSpy('cb');
+          scheduler.startNow(cb);
+          expect(cb.calls.count()).toBe(1);
+          scheduler.enqueue(cb);  // If this succeeds then the function was associated with the scheduler.
+        });
+      });
+
+      describe('startLater', () => {
+        it('should do that', done => {
+          const scheduler = factory();
+          const cb = jasmine.createSpy('cb');
+          scheduler.startLater(cb);
+          expect(cb.calls.count()).toBe(0);
+          scheduler.startLater(() => {
+            expect(cb.calls.count()).toBe(1);
+            done();
+          });
+        });
+      });
+      
       describe('callNow', () => {
         // TODO: figure out how to work with Jasmine async to be less awkward about use of it() here.
         
-        const scheduler = new Scheduler(window);
+        const scheduler = factory();
         const cb = jasmine.createSpy('cb');
-        cb.scheduler = scheduler;
+        scheduler.claim(cb);
       
         it('should call the function immediately', done => {
           function waiter() { done(); }
-          waiter.scheduler = scheduler;
+          scheduler.claim(waiter);
           
           scheduler.enqueue(cb);
           scheduler.enqueue(waiter);
@@ -61,28 +86,97 @@ define([
       });
     
       it('should invoke callbacks after one which throws', done => {
-        const scheduler = new Scheduler(window);
+        const scheduler = factory();
       
         const cb1 = jasmine.createSpy('cb1');
-        cb1.scheduler = scheduler;
+        scheduler.claim(cb1);
         const cb2base = jasmine.createSpy('cb2');
         function cb2() {
           cb2base();
           throw new Error('Uncaught error for testing.');
         }
-        cb2.scheduler = scheduler;
+        scheduler.claim(cb2);
         function cb3() {
           expect(cb1).toHaveBeenCalled();
           expect(cb2base).toHaveBeenCalled();
           // we are cb3 and were therefore called.
           done();
         }
-        cb3.scheduler = scheduler;
+        scheduler.claim(cb3);
       
         scheduler.enqueue(cb1);
         scheduler.enqueue(cb2);
         scheduler.enqueue(cb3);
       });
+      
+      // TODO: Test just basic functionality (.claim and .enqueue, deduplicating enqueues, etc)
+      // TODO: Test behavior of .syncEventCallback
+    }
+    
+    describe('Scheduler', () => {
+      itIsAScheduler(() => new Scheduler(window));
+    });
+    
+    describe('SubScheduler', () => {
+      // Run basic scheduler tests. (This will have an extra beforeEach but that's harmless.)
+      itIsAScheduler(() => new SubScheduler(new Scheduler(window), () => {}));
+      
+      let disable, rootScheduler, scheduler;
+      beforeEach(() => {
+        rootScheduler = new Scheduler(window);
+        scheduler = new SubScheduler(rootScheduler, (d) => {
+          disable = d;
+        });
+      });
+      
+      it('should not call callbacks previously scheduled', done => {
+        const cb1 = jasmine.createSpy('cb1');
+        scheduler.claim(cb1);
+        scheduler.enqueue(cb1);
+        disable();
+        rootScheduler.startLater(() => {
+          expect(cb1.calls.count()).toBe(0);
+          done();
+        });
+      });
+      
+      it('should not call callbacks newly scheduled', done => {
+        const cb1 = jasmine.createSpy('cb1');
+        scheduler.claim(cb1);
+        disable();
+        scheduler.enqueue(cb1);
+        rootScheduler.startLater(() => {
+          expect(cb1.calls.count()).toBe(0);
+          done();
+        });
+      });
+      
+      it('should startNow even if disabled', done => {
+        // Rationale: Code that does startNow may depend on the side effects of the callback for it to finish successfully.
+        const cb1 = jasmine.createSpy('cb1');
+        disable();
+        scheduler.startNow(cb1);
+        expect(cb1.calls.count()).toBe(1);
+        rootScheduler.startLater(() => {
+          expect(cb1.calls.count()).toBe(1);
+          done();
+        });
+      });
+      
+      it('should callNow even if disabled', done => {
+        // Rationale: Code that does callNow may depend on the side effects of the callback for it to finish successfully.
+        const cb1 = jasmine.createSpy('cb1');
+        scheduler.claim(cb1);
+        disable();
+        scheduler.callNow(cb1);
+        expect(cb1.calls.count()).toBe(1);
+        rootScheduler.startLater(() => {
+          expect(cb1.calls.count()).toBe(1);
+          done();
+        });
+      });
+      
+      // TODO: Decide on and test behavior of .syncEventCallback
     });
   });
   

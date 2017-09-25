@@ -233,7 +233,7 @@ define([
     
     var dataHook = function () {}, drawOuter = function () {};
     
-    var draw = config.boundedFn(function drawOuterTrampoline() {
+    const draw = config.scheduler.claim(function drawOuterTrampoline() {
       view.n.listen(draw);
       
       // Update canvas position and dimensions.
@@ -251,7 +251,6 @@ define([
       
       drawOuter(cleared);
     });
-    draw.scheduler = config.scheduler;
     
     if (gl) (function() {
       function initContext() {
@@ -273,7 +272,7 @@ define([
       dataHook(bundle);
       draw.scheduler.enqueue(draw);
     }
-    newFFTFrame.scheduler = config.scheduler;
+    config.scheduler.claim(newFFTFrame);
 
     fftCell.subscribe(newFFTFrame);
     draw();
@@ -416,7 +415,7 @@ define([
 
         // gradientZero and gradientScale set the scaling from data texture values to gradient texture coordinates
         // gradientInset is the amount to compensate for half-texel edges
-        function computeGradientScale() {
+        config.scheduler.startNow(function computeGradientScale() {
           var gradientInset = 0.5 / (gradientInit.length / components);
           var insetZero = gradientInset;
           var insetScale = 1 - gradientInset * 2;
@@ -439,9 +438,7 @@ define([
           gl.uniform1f(gl.getUniformLocation(waterfallProgram, 'gradientZero'), insetZero + insetScale * valueZero);
           gl.uniform1f(gl.getUniformLocation(waterfallProgram, 'gradientScale'), insetScale * valueScale);
           draw.scheduler.enqueue(draw);
-        }
-        computeGradientScale.scheduler = config.scheduler;
-        computeGradientScale();
+        });
       }());
 
       gl.bindTexture(gl.TEXTURE_2D, null);
@@ -750,9 +747,9 @@ define([
         cleared = true;
         draw.scheduler.enqueue(draw);
       }
-      changedSplit.scheduler = config.scheduler;
+      config.scheduler.claim(changedSplit);
       
-      var performDraw = config.boundedFn(function performDrawImpl(clearedIn) {
+      function performDraw(clearedIn) {
         commonBeforeDraw(draw);
         
         cleared = cleared || clearedIn;
@@ -888,7 +885,7 @@ define([
 
         dataToDraw = null;
         cleared = false;
-      });
+      }
 
       var dataToDraw = null;  // TODO this is a data flow kludge
       return {
@@ -975,7 +972,7 @@ define([
       ctx.fillRect(x1, 0, x2 - x1, ctx.canvas.height);
     }
     
-    var draw = config.boundedFn(function drawImpl() {
+    function draw() {
       view.n.listen(draw);
       var visibleDevice = radioCell.depend(draw).source_name.depend(draw);
       lvf = view.leftVisibleFreq();
@@ -1081,9 +1078,8 @@ define([
           }
         }
       }
-    });
-    draw.scheduler = config.scheduler;
-    config.scheduler.enqueue(draw);  // must draw after widget inserted to get proper layout
+    }
+    config.scheduler.startLater(draw);  // must draw after widget inserted to get proper layout
   }
   
   // Waterfall overlay printing amplitude labels.
@@ -1122,7 +1118,7 @@ define([
       outerEl.classList.toggle('widget-VerticalScale-expanded');
     }, false);
     
-    function draw() {
+    config.scheduler.startNow(function draw() {
       minLevel = minLevelCell.depend(draw);
       maxLevel = maxLevelCell.depend(draw);
       pixelHeight = view.getVisiblePixelHeight() * (1 - splitCell.depend(draw));
@@ -1139,9 +1135,7 @@ define([
         entry.my_update();
       }
       numberCache.flush();
-    }
-    draw.scheduler = config.scheduler;
-    draw();
+    });
   }
   
   function FreqScale(config) {
@@ -1172,12 +1166,10 @@ define([
     labels.className = 'freqscale-labels';
     
     outer.style.position = 'absolute';
-    function doLayout() {
+    config.scheduler.startNow(function doLayout() {
       // TODO: This is shared knowledge between this, WaterfallPlot, and ReceiverMarks. Should instead be managed by SpectrumView (since it already handles freq coordinates), in the form "get Y position of minLevel".
       outer.style.bottom = (view.parameters.spectrum_split.depend(doLayout) * 100).toFixed(2) + '%';
-    }
-    doLayout.scheduler = config.scheduler;
-    doLayout();
+    });
     
     // label maker fns
     function addChannel(record) {
@@ -1253,7 +1245,7 @@ define([
     var scale_fine1 = 4;
     var scale_fine2 = 2;
     
-    var draw = config.boundedFn(function drawImpl() {
+    config.scheduler.startNow(function draw() {
       view.n.listen(draw);
       lower = view.leftFreq();
       upper = view.rightFreq();
@@ -1298,8 +1290,6 @@ define([
       });
       labelCache.flush();
     });
-    draw.scheduler = config.scheduler;
-    draw();
   }
   
   // A collection/algorithm which allocates integer indexes to provided intervals such that no overlapping intervals have the same index.
@@ -1430,11 +1420,9 @@ define([
     var handle = positioner.appendChild(document.createElement('div'));
     handle.classList.add('widget-VerticalSplitHandle-handle');
     
-    function draw() {
+    config.scheduler.startNow(function draw() {
       positioner.style.bottom = (100 * target.depend(draw)) + '%';
-    }
-    draw.scheduler = config.scheduler;
-    draw();
+    });
     
     // TODO refactor into something generic that handles x or y and touch-event drags too
     // this code is similar to the ScopePlot drag code

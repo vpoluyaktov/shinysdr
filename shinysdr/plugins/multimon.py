@@ -253,7 +253,11 @@ class APRSProcessProtocol(ProcessProtocol):
 
 
 # TODO: Arrange for a way for the user to see why it is unavailable.
+<<<<<<< HEAD
 _multimon_available = test_subprocess('multimon-ng -h; exit 0', 'Available demodulators:', shell=True)
+=======
+_multimon_available = test_subprocess('multimon-ng -h; exit 0', 'vailable demodulators:', shell=True)
+>>>>>>> upstream/master
 
 
 pluginDef_APRS = ModeDef(mode='APRS',  # TODO: Rename mode to be more accurate
