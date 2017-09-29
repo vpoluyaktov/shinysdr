@@ -1,17 +1,17 @@
 // Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
-// 
+//
 // This file is part of ShinySDR.
-// 
+//
 // ShinySDR is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-// 
+//
 // ShinySDR is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU General Public License
 // along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -61,9 +61,9 @@ define([
   const {
     createWidgetExt,
   } = import_widget;
-  
+
   const exports = {};
-  
+
   function insertUnitIfPresent(type, container) {
     const unitSymbol = type.getNumericUnit().symbol;
     if (unitSymbol !== '') {
@@ -82,16 +82,16 @@ define([
     let appendTarget = container;
     const claimed = Object.create(null);
     let claimedEverything = false;
-    
+
     //container.textContent = '';
     container.classList.add('frame');
     if (config.shouldBePanel && !optEmbed) {
       container.classList.add('panel');
     }
-    
+
     // TODO: We ought to display these in some way. But right now the only labels-for-blocks are displayed separately using explicit code...
     container.removeAttribute('title');
-    
+
     function getAppend() {
       if (appendTarget === 'details') {
         appendTarget = container.appendChild(document.createElement('details'));
@@ -101,14 +101,14 @@ define([
         }
         appendTarget.appendChild(document.createElement('summary')).textContent = 'More';
       }
-      
+
       return appendTarget;
     }
-    
+
     function addWidget(name, widgetType, optBoxLabel) {
       var wEl = document.createElement('div');
       if (optBoxLabel !== undefined) { wEl.classList.add('panel'); }
-      
+
       var targetCell;
       if (typeof name === 'string') {
         claimed[name] = true;
@@ -126,7 +126,7 @@ define([
       } else {
         throw new Error('not understood target for addWidget: ' + name);
       }
-      
+
       let widgetCtor;
       if (typeof widgetType === 'string') {
         throw new Error('string widget types being deprecated, not supported here');
@@ -141,16 +141,16 @@ define([
       } else {
         throw new Error('bad widgetType: ' + widgetType);
       }
-      
+
       if (optBoxLabel !== undefined) {
         wEl.setAttribute('title', optBoxLabel);
       }
-      
+
       getAppend().appendChild(wEl);
       // TODO: Maybe createWidgetExt should be a method of the context?
       createWidgetExt(config.context, widgetCtor, wEl, targetCell);
     }
-    
+
     function ignore(name) {
       if (name === '*') {
         claimedEverything = true;
@@ -158,17 +158,17 @@ define([
         claimed[name] = true;
       }
     }
-    
+
     // TODO be less imperative
     function setInsertion(el) {
       appendTarget = el;
     }
-    
+
     function setToDetails() {
       // special value which is instantiated if anything actually gets appended
       appendTarget = 'details';
     }
-    
+
     // Ignore anything named in an "ignore: <name>" comment as an immediate child node.
     // TODO: Write a test for this feature
     (function() {
@@ -181,15 +181,15 @@ define([
         }
       }
     }());
-    
+
     if (optSpecial) {
       optSpecial.call(this, block, addWidget, ignore, setInsertion, setToDetails, getAppend);
     }
-    
+
     const sortTable = [];
     for (var key in block) {
       if (claimed[key] || claimedEverything) continue;
-      
+
       const member = block[key];
       if (member instanceof Cell) {
         if (member.type.isSingleValued()) {
@@ -204,11 +204,11 @@ define([
         console.warn('Block scan got unexpected object:', member);
       }
     }
-    
+
     sortTable.sort((a, b) => {
       return a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0;
     });
-    
+
     sortTable.forEach(function ({key, cell}) {
       // TODO: gimmick to support local metadata-less cells; stop passing key once metadata usage is more established.
       let label = cell.metadata.naming.label ? undefined : key;
@@ -216,21 +216,21 @@ define([
     });
   }
   exports.Block = Block;
-  
+
   // Delegate to a widget based on the target's cell type or interfaces.
   function PickWidget(config) {
     if (Object.getPrototypeOf(this) !== PickWidget.prototype) {
       throw new Error('cannot inherit from PickWidget');
     }
-    
+
     const targetCell = config.target;
     const context = config.context;
     const cellType = targetCell.type;
-    
+
     const ctorCell = new DerivedCell(anyT, config.scheduler, function (dirty) {
       if (cellType === blockT) {
         const block = targetCell.depend(dirty);
-      
+
         // TODO kludgy, need better representation of interfaces. At least pull this into a function itself.
         let ctor;
         Object.getOwnPropertyNames(block).some(function (key) {
@@ -242,9 +242,9 @@ define([
             if (ctor) return true;
           }
         });
-      
+
         return ctor || Block;
-        
+
       // TODO: Figure out how to have a dispatch table for this.
       } else if (cellType instanceof RangeT) {
         if (targetCell.set) {
@@ -273,16 +273,16 @@ define([
         return Generic;
       }
     });
-    
+
     return new (ctorCell.depend(config.rebuildMe))(config);
   }
   exports.PickWidget = PickWidget;
-  
+
   // TODO: lousy name
   // This abstract widget class is for widgets which use an INPUT or similar element and optionally wrap it in a panel.
   function SimpleElementWidget(config, expectedNodeName, buildPanel, initDataEl) {
     const target = config.target;
-    
+
     let dataElement;
     if (config.element.nodeName !== expectedNodeName) {
       const container = this.element = config.element;
@@ -291,15 +291,15 @@ define([
     } else {
       this.element = dataElement = config.element;
     }
-    
+
     const update = initDataEl(dataElement, target);
-    
+
     config.scheduler.startNow(function draw() {
       var value = target.depend(draw);
       update(value, draw);
     });
   }
-  
+
   function Generic(config) {
     SimpleElementWidget.call(this, config, undefined,
       function buildPanel(container) {
@@ -316,12 +316,12 @@ define([
       });
   }
   exports.Generic = Generic;
-  
+
   // widget for NoticeT type
   function Banner(config) {
     const type = config.target.type;
     const alwaysVisible = type instanceof NoticeT && type.alwaysVisible;  // TODO something better than instanceof...?
-    
+
     const textNode = document.createTextNode('');
     SimpleElementWidget.call(this, config, undefined,
       function buildPanel(container) {
@@ -348,17 +348,17 @@ define([
       });
   }
   exports.Banner = Banner;
-  
+
   class TextTerminal {
     constructor(config) {
       const target = config.target;
       this.element = config.element;
-      
+
       const textarea = config.element.appendChild(document.createElement('textarea'));
       textarea.readOnly = true;
       textarea.rows = 3;
       textarea.cols = 40;
-      
+
       config.scheduler.startNow(function draw() {
         textarea.textContent = String(target.depend(draw));
         textarea.scrollTop = textarea.scrollHeight;  // TODO better sticky behavior
@@ -366,7 +366,7 @@ define([
     }
   }
   exports.TextTerminal = TextTerminal;
-  
+
   // widget for TimestampT type
   var timestampUpdateClock = new Clock(1);
   function TimestampWidget(config) {
@@ -383,7 +383,7 @@ define([
         return function updateTimestamp(value, draw) {
           var relativeTime = timestampUpdateClock.convertToTimestampSeconds(timestampUpdateClock.depend(draw)) - value;
           holder.textContent = '' + Math.round(relativeTime);
-          
+
           var date = new Date(0);
           date.setUTCSeconds(value);
           element.title = '' + date;
@@ -391,38 +391,38 @@ define([
       });
   }
   exports.TimestampWidget = TimestampWidget;
-  
+
   function TextBox(config) {
     SimpleElementWidget.call(this, config, 'INPUT',
       function buildPanelForTextBox(container) {
         container.classList.add('widget-TextBox-panel');
-        
+
         if (container.hasAttribute('title')) {
           var labelEl = container.appendChild(document.createElement('span'));
           labelEl.classList.add('widget-TextBox-label');
           labelEl.appendChild(document.createTextNode(container.getAttribute('title')));
           container.removeAttribute('title');
         }
-        
+
         var input = container.appendChild(document.createElement('input'));
         input.type = 'text';
-        
+
         return input;
       },
       function initTextBox(input, target) {
         input.readOnly = !target.set;
-        
+
         input.addEventListener('input', function(event) {
           target.set(input.value);
         }, false);
-        
+
         return function updateTextBox(value) {
           input.value = value;
         };
       });
   }
   exports.TextBox = TextBox;
-  
+
   function NumberWidget(config) {
     SimpleElementWidget.call(this, config, 'TT',
       function buildPanel(container) {
@@ -442,7 +442,7 @@ define([
       });
   }
   exports.Number = NumberWidget;
-  
+
   function Knob(config) {
     const target = config.target;
     const writable = 'set' in target; // TODO better type protocol
@@ -456,10 +456,10 @@ define([
         return value;
       }
     }
-    
+
     const container = document.createElement('span');
     container.classList.add('widget-Knob-outer');
-    
+
     if (config.shouldBePanel) {
       const panel = document.createElement('div');
       panel.classList.add('panel');
@@ -472,7 +472,7 @@ define([
     } else {
       this.element = container;
     }
-    
+
     const places = [];
     const marks = [];
     function createPlace(i) {
@@ -489,20 +489,23 @@ define([
       const digitText = digit.appendChild(document.createTextNode('0'));
       places[i] = {element: digit, text: digitText};
       const scale = Math.pow(10, i);
-      
+
       if (!writable) return;
-      
+
       digit.tabIndex = -1;
-      
+
       function spin(direction) {
         target.set(clamp(direction * scale + target.get(), direction));
       }
-      digit.addEventListener("mousewheel", function(event) { // Not in FF
-        // TODO: deal with high-res/accelerated scrolling
-        spin(event.wheelDelta > 0 ? 1 : -1);
-        event.preventDefault();
-        event.stopPropagation();
-      }, {capture: true, passive: false});
+
+      if (!config.features['restrict_mousewheel']) {
+        digit.addEventListener("mousewheel", function(event) { // Not in FF
+          // TODO: deal with high-res/accelerated scrolling
+          spin(event.wheelDelta > 0 ? 1 : -1);
+          event.preventDefault();
+          event.stopPropagation();
+        }, {capture: true, passive: false});
+      }
       function focusNext() {
         if (i > 0) {
           places[i - 1].element.focus();
@@ -541,7 +544,7 @@ define([
       digit.addEventListener('keypress', event => {
         var ch = String.fromCharCode(event.charCode);
         var value = target.get();
-      
+
         switch (ch) {
           case '-':
           case '_':
@@ -561,7 +564,7 @@ define([
           default:
             break;
         }
-        
+
         // TODO I hear there's a new 'input' event which is better for input-ish keystrokes, use that
         var input = parseInt(ch, 10);
         if (isNaN(input)) return;
@@ -583,7 +586,7 @@ define([
         event.preventDefault();
         event.stopPropagation();
       });
-    
+
       // remember last place for tabbing
       digit.addEventListener('focus', event => {
         places.forEach(other => {
@@ -591,7 +594,7 @@ define([
         });
         digit.tabIndex = 0;
       }, false);
-    
+
       // spin buttons
       digit.style.position = 'relative';
       [-1, 1].forEach(direction => {
@@ -614,13 +617,13 @@ define([
         button.tabIndex = -1;
       });
     }
-    
+
     for (let i = 9; i >= 0; i--) {
       createPlace(i);
     }
-    
+
     places[places.length - 1].element.tabIndex = 0; // initial tabbable digit
-    
+
     config.scheduler.startNow(function draw() {
       const value = target.depend(draw);
       let valueStr = String(Math.round(value));
@@ -641,25 +644,25 @@ define([
     });
   }
   exports.Knob = Knob;
-  
+
   function SmallKnob(config) {
     SimpleElementWidget.call(this, config, 'INPUT',
       function buildPanelForSmallKnob(container) {
         container.classList.add('widget-SmallKnob-panel');
-        
+
         if (container.hasAttribute('title')) {
           var labelEl = container.appendChild(document.createElement('span'));
           labelEl.classList.add('widget-SmallKnob-label');
           labelEl.appendChild(document.createTextNode(container.getAttribute('title') + '\u00A0'));
           container.removeAttribute('title');
         }
-        
+
         var input = container.appendChild(document.createElement('input'));
         input.type = 'number';
         input.step = 'any';
-        
+
         insertUnitIfPresent(config.target.type, container);
-        
+
         return input;
       },
       function initSmallKnob(input, target) {
@@ -669,9 +672,9 @@ define([
           input.max = type.getMax();
           input.step = (type.integer && !type.logarithmic) ? 1 : 'any';
         }
-        
+
         input.readOnly = !target.set;
-        
+
         input.addEventListener('input', function(event) {
           if (type instanceof RangeT) {
             target.set(type.round(input.valueAsNumber, 0));
@@ -679,7 +682,7 @@ define([
             target.set(input.valueAsNumber);
           }
         }, false);
-        
+
         return function updateSmallKnob(value) {
           var sValue = +value;
           if (!isFinite(sValue)) {
@@ -691,30 +694,30 @@ define([
       });
   }
   exports.SmallKnob = SmallKnob;
-  
+
   function Slider(config, getT, setT) {
     var text;
     SimpleElementWidget.call(this, config, 'INPUT',
       function buildPanelForSlider(container) {
         container.classList.add('widget-Slider-panel');
-        
+
         if (container.hasAttribute('title')) {
           var labelEl = container.appendChild(document.createElement('span'));
           labelEl.classList.add('widget-Slider-label');
           labelEl.appendChild(document.createTextNode(container.getAttribute('title')));
           container.removeAttribute('title');
         }
-        
+
         var slider = container.appendChild(document.createElement('input'));
         slider.type = 'range';
         slider.step = 'any';
-        
+
         var textEl = container.appendChild(document.createElement('span'));
         textEl.classList.add('widget-Slider-text');
         text = textEl.appendChild(document.createTextNode(''));
-        
+
         insertUnitIfPresent(config.target.type, container);
-        
+
         return slider;
       },
       function initSlider(slider, target) {
@@ -729,10 +732,10 @@ define([
             format = function(n) { return '' + n; };
           }
         }
-        
+
         // readOnly is not available for input type=range
         slider.disabled = !target.set;
-        
+
         function listener(event) {
           if (type instanceof RangeT) {
             target.set(type.round(setT(slider.valueAsNumber), 0));
@@ -742,7 +745,7 @@ define([
         }
         // Per HTML5 spec, dragging fires 'input', but not 'change', event. However Chrome only recently (observed 2014-04-12) got this right, so we had better listen to both.
         slider.addEventListener('change', listener, false);
-        slider.addEventListener('input', listener, false);  
+        slider.addEventListener('input', listener, false);
         return function updateSlider(value) {
           var sValue = getT(value);
           if (!isFinite(sValue)) {
@@ -768,7 +771,7 @@ define([
       function buildPanelForMeter(container) {
         // TODO: Reusing styles for another widget -- rename to suit
         container.classList.add('widget-Slider-panel');
-        
+
         if (container.hasAttribute('title')) {
           var labelEl = container.appendChild(document.createElement('span'));
           labelEl.classList.add('widget-Slider-label');
@@ -776,20 +779,20 @@ define([
               container.getAttribute('title') + '\u00A0'));
           container.removeAttribute('title');
         }
-        
+
         var meter = container.appendChild(document.createElement('meter'));
-        
+
         var textEl = container.appendChild(document.createElement('span'));
         textEl.classList.add('widget-Slider-text');
         text = textEl.appendChild(document.createTextNode(''));
-        
+
         insertUnitIfPresent(config.target.type, container);
-        
+
         return meter;
       },
       function initMeter(meter, target) {
         var format = function(n) { return n.toFixed(2); };
-        
+
         var type = target.type;
         if (type instanceof RangeT) {
           meter.min = type.getMin();
@@ -798,7 +801,7 @@ define([
             format = function(n) { return '' + n; };
           }
         }
-        
+
         return function updateMeter(value) {
           value = +value;
           meter.value = value;
@@ -809,7 +812,7 @@ define([
       });
   }
   exports.Meter = Meter;
-  
+
   function Toggle(config) {
     SimpleElementWidget.call(this, config, 'INPUT',
       function buildPanelForToggle(container) {
@@ -831,11 +834,11 @@ define([
       });
   }
   exports.Toggle = Toggle;
-  
+
   // Create children of 'container' according to target's EnumT (or RangeT) type, unless appropriate children already exist.
   function initEnumElements(container, selector, target, createElement) {
     const enumTable = target.type.getEnumTable();
-    
+
     const seen = new Set();
     Array.prototype.forEach.call(container.querySelectorAll(selector), function (element) {
       var value = element.value;
@@ -860,12 +863,12 @@ define([
       });
     }
   }
-  
+
   function Select(config) {
     SimpleElementWidget.call(this, config, 'SELECT',
       function buildPanelForSelect(container) {
         //container.classList.add('widget-Popup-panel');
-        
+
         // TODO: recurring pattern -- extract
         if (container.hasAttribute('title')) {
           var labelEl = container.appendChild(document.createElement('span'));
@@ -873,7 +876,7 @@ define([
           container.appendChild(document.createTextNode(' '));
           container.removeAttribute('title');
         }
-        
+
         return container.appendChild(document.createElement('select'));
       },
       function initSelect(select, target) {
@@ -891,14 +894,14 @@ define([
         select.addEventListener('change', event => {
           target.set(numeric ? +select.value : select.value);
         }, false);
-        
+
         return function updateSelect(value) {
           select.value = '' + value;
         };
       });
   }
   exports.Select = Select;
-  
+
   function Radio(config) {
     var target = config.target;
     const numeric = target.type instanceof RangeT;  // TODO better test, provide coercion in the types
@@ -931,13 +934,13 @@ define([
     });
   }
   exports.Radio = Radio;
-  
+
   function CommandButton(config) {
     var commandCell = config.target;
     var panel = this.element = config.element;
     var isDirectlyButton = panel.tagName === 'BUTTON';
     if (!isDirectlyButton) panel.classList.add('panel');
-    
+
     var button = isDirectlyButton ? panel : panel.querySelector('button');
     if (!button) {
       button = panel.appendChild(document.createElement('button'));
@@ -945,10 +948,10 @@ define([
         button.textContent = panel.getAttribute('title');
         panel.removeAttribute('title');
       } else {
-        button.textContent = '<unknown action>'; 
+        button.textContent = '<unknown action>';
       }
     }
-    
+
     button.disabled = false;
     button.onclick = function (event) {
       button.disabled = true;  // TODO: Some buttons should be rapid-fireable, this is mainly to give a latency cue
@@ -958,11 +961,11 @@ define([
     };
   }
   exports.CommandButton = CommandButton;
-  
+
   // widget for the shinysdr.telemetry.Track type
   function TrackWidget(config) {
     var actions = config.actions;
-    
+
     // TODO not _really_ a SimpleElementWidget
     SimpleElementWidget.call(this, config, 'TABLE',
       function buildPanelForTrack(container) {
@@ -971,9 +974,9 @@ define([
           labelEl.appendChild(document.createTextNode(container.getAttribute('title')));
           container.removeAttribute('title');
         }
-        
+
         var valueEl = container.appendChild(document.createElement('TABLE'));
-        
+
         return valueEl;
       },
       function initEl(valueEl, target) {
@@ -1002,7 +1005,7 @@ define([
         var posRow = addRow('Position', true);
         var velRow = addRow('Velocity', false);
         var vertRow = addRow('Vertical', false);
-        
+
         function formatitude(value, p, n) {
           value = +value;
           if (value < 0) {
@@ -1034,24 +1037,24 @@ define([
             row.row.style.display = 'none';
           }
         }
-        
+
         return function updateEl(track) {
           // TODO: Rewrite this to comply with some kind of existing convention for position reporting formatting.
           // TODO: Display the timestamp.
-          
+
           // horizontal position/orientation
           formatGroup(posRow, function(write) {
             write(track.latitude, formatitude(track.latitude.value, 'N', 'S'));
             write(track.longitude, formatitude(track.longitude.value, 'E', 'W'));
             write(track.heading, formatAngle(track.heading.value));
           });
-          
+
           // horizontal velocity
           formatGroup(velRow, function(write) {
             write(track.h_speed, (+track.h_speed.value).toFixed(1) + ' m/s');
             write(track.track_angle, formatAngle(track.track_angle.value));
           });
-          
+
           // vertical pos/vel
           formatGroup(vertRow, function(write) {
             write(track.altitude, (+track.altitude.value).toFixed(1) + ' m');
@@ -1061,17 +1064,17 @@ define([
       });
   }
   exports.TrackWidget = TrackWidget;
-  
+
   function MeasvizWidget(config) {
     const target = config.target;
     const container = this.element = config.element;
-        
+
     const isRange = target.type instanceof RangeT;
     const scale = (isRange && target.type.integer) ? 1 : 1000;
-    
+
     const buffer = new Float32Array(128);  // TODO magic number
     let index = 0;
-    
+
     const graph = new measviz.Graph({
       buffer: buffer,
       getBufferIndex() { return index; },
@@ -1081,7 +1084,7 @@ define([
       high: isRange ? scale * target.type.getMax() : Infinity,
       max: isRange ? scale * target.type.getMax() : Infinity
     });
-    
+
     if (config.shouldBePanel) {
       container.classList.add('panel');
       if (container.hasAttribute('title')) {
@@ -1090,7 +1093,7 @@ define([
       }
     }
     container.appendChild(graph.element);
-    
+
     config.scheduler.startNow(function draw() {
       buffer[index] = target.depend(draw) * scale;
       index = mod(index + 1, buffer.length);
@@ -1098,36 +1101,36 @@ define([
     });
   }
   exports.MeasvizWidget = MeasvizWidget;
-  
+
   // TODO: Better name
   class ObjectInspector {
     constructor(config) {
       const target = config.target;
       const container = this.element = config.element;
       const baseId = config.element.id;
-      
+
       const metaField = container.appendChild(document.createElement(container.tagName === 'DETAILS' ? 'summary' : 'div'));
-      
+
       if (config.element.title) {
         const t = document.createTextNode(config.element.title);
         config.element.removeAttribute('title');
         metaField.appendChild(t);
         metaField.appendChild(oiMetasyntactic(' = '));
       }
-      
+
       metaField.appendChild(document.createTextNode(String(target.type) + ' '));
       metaField.appendChild(oiMetasyntactic(target.set ? 'RW' : 'RO'));
-      
+
       const singleLineContainer = metaField.appendChild(document.createElement('span'));
       singleLineContainer.classList.add('widget-ObjectInspector-single-line');
-      
+
       //container.appendChild(document.createTextNode('\u00A0'));
-      
+
       config.scheduler.startNow(function updateValue() {
         while (container.lastChild && container.lastChild !== metaField) {
           container.removeChild(container.lastChild);
         }
-        
+
         const value = config.target.depend(updateValue);
         if (typeof value === 'object' && value !== null) {
           getInterfaces(value).forEach(i => {
@@ -1157,21 +1160,21 @@ define([
           singleLineContainer.appendChild(oiMetasyntactic(' value= '));
           singleLineContainer.appendChild(document.createTextNode(typeof value));
           singleLineContainer.appendChild(oiMetasyntactic(' '));
-          
+
           singleLineContainer.appendChild(oiStringify(value));
         }
       });
     }
   }
   exports.ObjectInspector = ObjectInspector;
-  
+
   function oiMetasyntactic(text) {
     const el = document.createElement('span');
     el.textContent = text;
     el.classList.add('widget-ObjectInspector-metasyntactic');
     return el;
   }
-  
+
   function oiStringify(value) {
     try {
       return document.createTextNode(JSON.stringify(value));
@@ -1183,7 +1186,7 @@ define([
       }
     }
   }
-  
-  
+
+
   return Object.freeze(exports);
 });

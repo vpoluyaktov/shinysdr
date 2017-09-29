@@ -1,28 +1,28 @@
 // Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
-// 
+//
 // This file is part of ShinySDR.
-// 
+//
 // ShinySDR is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-// 
+//
 // ShinySDR is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
-// 
+//
 // You should have received a copy of the GNU General Public License
 // along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
 'use strict';
 
 define([
-  './coordination', 
-  './domtools', 
-  './events', 
-  './math', 
-  './types', 
+  './coordination',
+  './domtools',
+  './events',
+  './math',
+  './types',
   './values',
 ], (
   import_coordination,
@@ -57,16 +57,16 @@ define([
     StorageNamespace,
     makeBlock,
   } = import_values;
-  
+
   const exports = {};
-  
+
   const elementHasWidgetRole = new WeakMap();
-  
+
   function alwaysCreateReceiverFromEvent(event) {
     return event.shiftKey;
   }
   exports.alwaysCreateReceiverFromEvent = alwaysCreateReceiverFromEvent;
-  
+
   // TODO figure out what this does and give it a better name
   function Context(config) {
     this.widgets = config.widgets;
@@ -80,6 +80,7 @@ define([
     // TODO reconsider this unusual handling. Required to avoid miscellaneous things needing to define a coordinator.
     this.coordinator = config.coordinator || new Coordinator(this.scheduler, this.freqDB, this.radioCell);
     this.actionCompleted = config.actionCompleted || function actionCompletedNoop() {};
+    this.restrict_mousewheel = config.features['restrict_mousewheel']
     Object.freeze(this);
   }
   Context.prototype.withSpectrumView = function (outerElement, innerElement, monitor, isRFSpectrum) {
@@ -126,22 +127,22 @@ define([
     });
   };
   exports.Context = Context;
-  
+
   function createWidgetsInNode(rootTargetCell, context, node) {
     Array.prototype.forEach.call(node.childNodes, function (child) {
       createWidgets(rootTargetCell, context, child);
     });
   }
-  
+
   // Replace the given template/input node with a widget node.
   function createWidget(targetCellCell, targetStr, context, node, widgetCtor) {
     if (elementHasWidgetRole.has(node)) {
       throw new Error('node already a widget ' + elementHasWidgetRole.get(node));
     }
-    
+
     const templateStash = node;
     elementHasWidgetRole.set(node, 'template');
-    
+
     const container = node.parentNode;
     if (!container) {
       throw new Error('createWidget: The supplied node ' + node.nodeName + ' did not have a parent node.');
@@ -149,10 +150,10 @@ define([
 
     let currentWidgetEl = node;
     const shouldBePanel = container.classList.contains('frame') || container.nodeName === 'DETAILS';  // TODO: less DWIM, more precise
-    
+
     const id = node.id;
     const idPrefix = id === '' ? null : node.id + '.';
-    
+
     context.scheduler.startNow(function go() {
       // TODO: Unbreakable notify loop on targetCellCell. We could stop it on explicit destroy, but explicit destroy doesn't happen very much!
       const targetCell = targetCellCell.depend(go);
@@ -162,18 +163,18 @@ define([
         }
         return;
       }
-      
+
       lifecycleDestroy(currentWidgetEl);
 
       const newSourceEl = templateStash.cloneNode(true);
       elementHasWidgetRole.set(newSourceEl, 'instance');
       container.replaceChild(newSourceEl, currentWidgetEl);
-      
+
       // TODO: Better interface to the metadata
       if (!newSourceEl.hasAttribute('title') && targetCell.metadata.naming.label !== null) {
         newSourceEl.setAttribute('title', targetCell.metadata.naming.label);
       }
-      
+
       let disableScheduler;
       const config = Object.freeze({
         scheduler: new SubScheduler(context.scheduler, disable => {
@@ -197,7 +198,7 @@ define([
       let widget;
       try {
         widget = new widgetCtor(config);
-        
+
         if (!(widget.element instanceof Element)) {
           throw new TypeError('Widget ' + widget.constructor.name + ' did not provide an element but ' + widget.element);
         }
@@ -207,31 +208,31 @@ define([
         // TODO: Arrange so that if widgetCtor is widgets_basic.PickWidget it can give the more-specific name.
         widget = new ErrorWidget(config, widgetCtor, error);
       }
-      
+
       widget.element.classList.add('widget-' + widget.constructor.name);  // TODO use stronger namespacing
-      
+
       const newEl = widget.element;
       const placeMark = newSourceEl.nextSibling;
       if (newSourceEl.hasAttribute('title') && newSourceEl.getAttribute('title') === templateStash.getAttribute('title')) {
         console.warn('Widget ' + widget.constructor.name + ' did not handle title attribute');
       }
-      
+
       if (newSourceEl.parentNode === container) {
         container.replaceChild(newEl, newSourceEl);
       } else {
         container.insertBefore(newEl, placeMark);
       }
       currentWidgetEl = newEl;
-      
+
       doPersistentDetails(currentWidgetEl);
-      
+
       // allow widgets to embed widgets
       createWidgetsInNode(targetCell, context, widget.element);
-      
+
       newEl.addEventListener('shinysdr:lifecycledestroy', event => {
         disableScheduler();
       }, false);
-      
+
       // signal now that we've inserted
       // TODO: Make this less DWIM
       lifecycleInit(newEl);
@@ -239,7 +240,7 @@ define([
         lifecycleInit(newEl);
       }, 0);
     });
-    
+
     return Object.freeze({
       destroy: function() {
         lifecycleDestroy(currentWidgetEl);
@@ -247,7 +248,7 @@ define([
       }
     });
   }
-  
+
   function createWidgetExt(context, widgetCtor, node, targetCell) {
     if (!targetCell) {
       // catch a likely early error
@@ -261,7 +262,7 @@ define([
       widgetCtor);
   }
   exports.createWidgetExt = createWidgetExt;
-  
+
   // return a cell containing the cell from rootCell's block according to str
   // e.g. if str is foo.bar then the returned cell's value is
   //   rootCell.get().foo.get().bar
@@ -275,7 +276,7 @@ define([
       return cell;
     });
   }
-  
+
   function createWidgets(rootTargetCell, context, node) {
     var scheduler = context.scheduler;
     if (node.hasAttribute && node.hasAttribute('data-widget')) {
@@ -287,7 +288,7 @@ define([
         targetStr = "<can't happen>";
         targetCellCell = new ConstantCell(rootTargetCell, anyT);
       }
-      
+
       var typename = node.getAttribute('data-widget');
       node.removeAttribute('data-widget');  // prevent widgetifying twice
       if (typename === null) {
@@ -300,12 +301,12 @@ define([
         return;
       }
       // TODO: use a placeholder widget (like Squeak Morphic does) instead of having a different code path for the above errors
-      
+
       createWidget(targetCellCell, targetStr, context, node, widgetCtor);
-      
+
     } else if (node.hasAttribute && node.hasAttribute('data-target')) (function () {
       doPersistentDetails(node);
-      
+
       var html = document.createDocumentFragment();
       while (node.firstChild) html.appendChild(node.firstChild);
       scheduler.start(function go() {
@@ -315,7 +316,7 @@ define([
           node.textContent = '[Missing: ' + node.getAttribute('data-target') + ']';
           return;
         }
-        
+
         node.textContent = ''; // fast clear
         node.appendChild(html.cloneNode(true));
         createWidgetsInNode(target, context, node);
@@ -327,7 +328,7 @@ define([
     }
   }
   exports.createWidgets = createWidgets;
-  
+
   // Bind a <details> element's open state to localStorage, if this is one
   function doPersistentDetails(node) {
     if (node.nodeName === 'DETAILS' && node.hasAttribute('id')) {
@@ -339,7 +340,7 @@ define([
       }).observe(node, {attributes: true, attributeFilter: ['open']});
     }
   }
-  
+
   // Defines the display parameters and coordinate calculations of the spectrum widgets
   // TODO: Revisit whether this should be in widgets.js -- it is closely tied to the spectrum widgets, but also managed by the widget framework.
   var MAX_ZOOM_BINS = 60; // Maximum zoom shows this many FFT bins
@@ -355,16 +356,16 @@ define([
     var self = this;
 
     var n = this.n = new Notifier();
-    
+
     // per-drawing-frame parameters
     var nyquist, centerFreq, leftFreq, rightFreq, pixelWidth, pixelsPerHertz, analytic;
-    
+
     // Zoom state variables
     // We want the cursor point to stay fixed, but scrollLeft quantizes to integer; fractionalScroll stores a virtual fractional part.
     var zoom = 1;
     var fractionalScroll = 0;
     var cacheScrollLeft = 0;
-    
+
     // Restore persistent zoom state
     container.addEventListener('shinysdr:lifecycleinit', event => {
       // TODO: clamp zoom here in the same way changeZoom does
@@ -379,7 +380,7 @@ define([
         prepare();
       });
     });
-    
+
     function prepare() {
       // TODO: unbreakable notify loop here; need to be lazy
       var sourceType = signalTypeCell.depend(prepare);
@@ -394,51 +395,51 @@ define([
       leftFreq = analytic ? centerFreq - nyquist : centerFreq;
       rightFreq = centerFreq + nyquist;
       pixelsPerHertz = pixelWidth / (rightFreq - leftFreq) * zoom;
-      
+
       if (!isFinite(fractionalScroll)) {
         console.error("Shouldn't happen: SpectrumView fractionalScroll =", fractionalScroll);
         fractionalScroll = 0;
       }
-      
+
       // Adjust scroll to match possible viewport size change.
       // (But if we are hidden or zero size, then the new scroll position would be garbage, so keep the old state.)
       if (container.offsetWidth > 0 && pixelWidth !== container.offsetWidth) {
         // Compute change (with case for first time initialization)
         var scaleChange = isFinite(pixelWidth) ? container.offsetWidth / pixelWidth : 1;
         var scrollValue = (cacheScrollLeft + fractionalScroll) * scaleChange;
-        
+
         pixelWidth = container.offsetWidth;
-        
+
         // Update scrollable range
         var w = pixelWidth * zoom;
         innerElement.style.width = w + 'px';
-        
+
         // Apply change
         container.scrollLeft = scrollValue;
         fractionalScroll = scrollValue - container.scrollLeft;
       }
-      
+
       // accessing scrollLeft triggers relayout, so cache it
       cacheScrollLeft = container.scrollLeft;
       n.notify();
     }
     scheduler.claim(prepare);
     prepare();
-    
+
     window.addEventListener('resize', function (event) {
       // immediate to ensure smooth animation and to allow scroll adjustment
       scheduler.callNow(prepare);
     }.bind(this));
-    
+
     container.addEventListener('scroll', scheduler.syncEventCallback(function (event) {
       storage.setItem('scroll', String(container.scrollLeft + fractionalScroll));
       // immediate to ensure smooth animation and interaction
       scheduler.callNow(prepare);
     }), false);
-    
+
     // exported for the sake of createWidgets -- TODO proper factoring?
     this.scheduler = scheduler;
-    
+
     this.isRFSpectrum = function () {
       return isRFSpectrum;
     };
@@ -480,7 +481,7 @@ define([
       // TODO: This being vertical rather than horizontal doesn't fit much with the rest of SpectrumView's job, but it needs to know about innerElement.
       return innerElement.offsetHeight;
     };
-    
+
     function clampZoom(zoomValue) {
       var maxZoom = Math.max(
         1,  // at least min zoom,
@@ -503,37 +504,37 @@ define([
     }
     function finishZoomUpdate(scrollValue) {
       scrollValue = clampScroll(scrollValue);
-      
+
       // Final scroll-range update.
       var w = pixelWidth * zoom;
       innerElement.style.width = w + 'px';
-      
+
       container.scrollLeft = scrollValue;
       fractionalScroll = scrollValue - container.scrollLeft;
-      
+
       storage.setItem('zoom', String(zoom));
       storage.setItem('scroll', String(scrollValue));
-      
+
       // recompute with new scrollLeft/fractionalScroll
       scheduler.callNow(prepare);
     }
-    
+
     this.changeZoom = function changeZoom(delta, cursorX) {
       cursorX += fractionalScroll;
       var cursor01 = cursorX / pixelWidth;
-      
+
       // Find frequency to keep under the cursor
       var cursorFreq = this.leftVisibleFreq() * (1-cursor01) + this.rightVisibleFreq() * cursor01;
-      
+
       // Adjust and clamp zoom
       zoom *= Math.exp(-delta * 0.0005);
       zoom = clampZoom(zoom);
-      
+
       // Recompute parameters now so we can adjust pan (scroll)
       scheduler.callNow(prepare);
-      
+
       var unadjustedCursorFreq = this.leftVisibleFreq() * (1-cursor01) + this.rightVisibleFreq() * cursor01;
-      
+
       // Force scrollable range to update
       startZoomUpdate();
       // Current virtual scroll
@@ -543,7 +544,7 @@ define([
       // Write back
       finishZoomUpdate(scroll);
     };
-    
+
     // TODO: mousewheel event is allegedly nonstandard and inconsistent among browsers, notably not in Firefox (not that we're currently FF-compatible due to the socket issue).
     container.addEventListener('mousewheel', function(event) {
       if (Math.abs(event.wheelDeltaY) > Math.abs(event.wheelDeltaX)) {
@@ -555,17 +556,17 @@ define([
         // Horizontal scrolling (or diagonal w/ useless vertical component): if hits edge, change frequency.
         if (event.wheelDeltaX > 0 && cacheScrollLeft === 0
             || event.wheelDeltaX < 0 && cacheScrollLeft === (container.scrollWidth - container.clientWidth)) {
-          if (isRFSpectrum) {
+          if (!this.restrict_mousewheel && isRFSpectrum) {
             var freqCell = radioCell.get().source.get().freq;
             freqCell.set(freqCell.get() + (event.wheelDeltaX * -0.12) / pixelsPerHertz);
           }
-          
+
           // This shouldn't be necessary, but Chrome treats horizontal scroll events from touchpad as a back/forward gesture.
           event.preventDefault();
         }
       }
     }, {capture: true, passive: false});
-    
+
     function clientXToViewportLeft(clientX) {
       return clientX - container.getBoundingClientRect().left;
     }
@@ -575,17 +576,17 @@ define([
     function clientXToFreq(clientX) {
       return clientXToHardLeft(clientX) / pixelsPerHertz + leftFreq;
     }
-    
+
     var activeTouches = Object.create(null);
     var mayTapToTune = false;
-    
+
     container.addEventListener('touchstart', function (event) {
       // Prevent mouse-emulation handling
       event.preventDefault();
-      
+
       // Tap-to-tune requires exactly one touch just starting
       mayTapToTune = Object.keys(activeTouches) === 0 && event.changedTouches.length === 1;
-      
+
       // Record the frequency the user has touched
       Array.prototype.forEach.call(event.changedTouches, function (touch) {
         var x = clientXToViewportLeft(touch.clientX);
@@ -596,12 +597,12 @@ define([
         };
       });
     }, {capture: false, passive: false});
-    
+
     container.addEventListener('touchmove', function (event) {
       Array.prototype.forEach.call(event.changedTouches, function (touch) {
         activeTouches[touch.identifier].nowView = clientXToViewportLeft(touch.clientX);
       });
-      
+
       const touchIdentifiers = Object.keys(activeTouches);
       if (touchIdentifiers.length >= 2) {
         // Zoom using two touches
@@ -617,7 +618,7 @@ define([
         zoom = clampZoom(newPixelsPerHertz / unzoomedPixelsPerHertz);
         startZoomUpdate();
       }
-      
+
       // Compute scroll pos, using NEW zoom value
       var scrolls = [];
       for (var idString in activeTouches) {
@@ -627,9 +628,9 @@ define([
         var newScrollLeft = (grabbedFreq - leftFreq) * pixelsPerHertz - touchedPixelNow;
         scrolls.push(newScrollLeft);
       }
-      
+
       var avgScroll = scrolls.reduce(function (a, b) { return a + b; }, 0) / scrolls.length;
-      
+
       // Frequency pan
       var clampedScroll = clampScroll(avgScroll);
       var overrun = avgScroll - clampedScroll;
@@ -638,17 +639,17 @@ define([
         var freqCell = radioCell.get().source.get().freq;
         freqCell.set(freqCell.get() + overrun / pixelsPerHertz);
       }
-      
+
       finishZoomUpdate(clampedScroll);
     }, {capture: true, passive: true});
-    
+
     function touchcancel(event) {
       Array.prototype.forEach.call(event.changedTouches, function (touch) {
         delete activeTouches[touch.identifier];
       });
     }
     container.addEventListener('touchcancel', touchcancel, {capture: true, passive: true});
-    
+
     container.addEventListener('touchend', function (event) {
       // Tap-to-tune
       // TODO: The overall touch event handling is disabling clicking on frequency DB labels. We need to recognize them as event targets in _this_ bunch of handlers, so that we can decide whether a gesture is pan or tap-on-label.
@@ -663,20 +664,20 @@ define([
           });
         }
       }
-      
+
       // Forget the touch
       touchcancel(event);
     }, {capture: true, passive: true});
-    
+
     this.addClickToTune = element => {
       if (!isRFSpectrum) return;
-      
+
       let dragReceiver = null;
-      
+
       function clickTune(event) {
         const firstEvent = event.type === 'mousedown';
         const freq = clientXToFreq(event.clientX);
-        
+
         if (!firstEvent && !dragReceiver) {
           // We sent the request to create a receiver, but it doesn't exist on the client yet. Do nothing.
           // TODO: Check for the appearance of the receiver and start dragging it.
@@ -686,7 +687,7 @@ define([
             freq: freq,
             alwaysCreate: firstEvent && alwaysCreateReceiverFromEvent(event)
           });
-          
+
           // handled event
           event.stopPropagation();
           event.preventDefault(); // no drag selection
@@ -703,7 +704,7 @@ define([
         clickTune(event);
       }, false);
     };
-    
+
     function cc(key, type, value) {
       return new StorageCell(storage, type, value, key);
     }
@@ -713,17 +714,17 @@ define([
       spectrum_level_min: cc('spectrum_level_min', new RangeT([[-200, -20]], false, false), -130),
       spectrum_level_max: cc('spectrum_level_max', new RangeT([[-100, 0]], false, false), -20)
     });
-    
+
     lifecycleInit(container);
   }
   exports.SpectrumView = SpectrumView;
-  
+
   function ErrorWidget(config, widgetCtor, error) {
     this.element = document.createElement('div');
     let widgetCtorName = widgetCtor ? widgetCtor.name : '<unknown widget type>';
     this.element.appendChild(document.createTextNode('An error occurred preparing what should occupy this space (' + widgetCtorName + ' named ' + config.element.getAttribute('title') + '). '));
     this.element.appendChild(document.createElement('code')).textContent = String(error);
   }
-  
+
   return Object.freeze(exports);
 });

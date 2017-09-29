@@ -1,17 +1,17 @@
 # Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
 #
 # This file is part of ShinySDR.
-# 
+#
 # ShinySDR is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # ShinySDR is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -53,47 +53,47 @@ class Config(object):
 
         # provided for the convenience of the config file
         self.reactor = reactor
-        
+
         # these are to be read by main
         self._state_filename = None
         self._service_makers = []
-        
+
         # private: config state
         self.__server_audio = None
-        
+
         # private: meta
         self.__waiting = []
         self.__finished = False
-    
+
     @defer.inlineCallbacks
     def _wait_and_validate(self):
         yield defer.gatherResults(self.__waiting)
-        
+
         # reboot used to be not-a-plugin so we have this hardcoded definition -- but exposing the plugin isn't necessarily a good replacement anyway
         if self.features._get('reboot'):
             from shinysdr.plugins.rebooter import Rebooter
             self.devices.add('rebooter', Rebooter(self.reactor))
-        
+
         self.__finished = True
         if len(self._service_makers) == 0:
             warnings.warn('No network service defined!')
-    
+
     def _create_app(self):
         from shinysdr.i.session import AppRoot
         return AppRoot(
             devices=self.devices._values,
             audio_config=self.__server_audio,
             features=self.features._get_all())
-    
+
     def _not_finished(self):
         if self.__finished:
             raise ConfigTooLateException()
-    
+
     def wait_for(self, deferred):
         """Wait for the provided Deferred before assuming the configuration to be finished."""
         self._not_finished()
         self.__waiting.append(defer.maybeDeferred(lambda: deferred))
-    
+
     def persist_to_file(self, filename):
         self._not_finished()
         if self._state_filename is not None:
@@ -103,12 +103,12 @@ class Config(object):
     def serve_web(self, http_endpoint, ws_endpoint, root_cap=None, title=u'ShinySDR'):
         self._not_finished()
         # TODO: See if we're reinventing bits of Twisted service stuff here
-        
+
         if root_cap is not None:
             root_cap = unicode(root_cap)
             if len(root_cap) <= 0:
                 raise ConfigException('config.serve_web: root_cap must be None or a nonempty string')
-        
+
         def make_service(app):
             # TODO: Temporary glue while we refactor for multisession
             session = app.get_session()
@@ -119,7 +119,7 @@ class Config(object):
             else:
                 cap_table.add(session, cap=root_cap)
                 root_cap_subst = root_cap
-            
+
             from shinysdr.i.network.app import WebService
             return WebService(
                 reactor=self.reactor,
@@ -131,30 +131,30 @@ class Config(object):
                 ws_endpoint=ws_endpoint,
                 root_cap=root_cap_subst,
                 title=title)
-        
+
         self._service_makers.append(make_service)
 
     def serve_ghpsdr(self):
         self._not_finished()
         # TODO: Alternate services should be provided using getPlugins rather than hardcoded
-        
+
         def make_service(app):
             import shinysdr.plugins.ghpsdr as lazy_ghpsdr
             return lazy_ghpsdr.DspserverService(self.reactor, app.get_receive_flowgraph(), 'tcp:8000')
-        
+
         self._service_makers.append(make_service)
-    
+
     def set_server_audio_allowed(self, allowed, device_name='', sample_rate=44100):
         """
         Set whether clients are allowed to send output to the server audio device.
         """
         self._not_finished()
-        
+
         if allowed:
             self.__server_audio = (str(device_name), int(sample_rate))
         else:
             self.__server_audio = None
-    
+
     def set_stereo(self, value):
         """
         Deprecated alias for self.features.(en|dis)able('stereo').
@@ -196,17 +196,17 @@ class _ConfigDevices(_ConfigDict):
 class _ConfigDbs(object):
     __read_only_databases = None
     __writable_db = None
-    
+
     def __init__(self, config, reactor):
         self._config = config
         self.__reactor = reactor
-        
+
         self.__read_only_databases, diagnostics = databases_from_directory(
             self.__reactor,
             sibpath(__file__, 'data/dbs/'))
         if len(diagnostics) > 0:
             raise ConfigException(diagnostics)
-    
+
     def add_directory(self, path):
         self._config._not_finished()
         path = str(path)
@@ -223,13 +223,13 @@ class _ConfigDbs(object):
         self.__writable_db, diagnostics = database_from_csv(self.__reactor, path, writable=True)
         for d in diagnostics:
             log.msg('%s: %s' % (path, d))
-    
+
     def _get_writable_database(self):
         if self.__writable_db is None:
             # TODO temporary stub till the client takes more configurability -- we should omit the writable db rather than having an unbacked one
             self.__writable_db = DatabaseModel(None, {}, writable=True)
         return self.__writable_db
-    
+
     def _get_read_only_databases(self):
         if self.__read_only_databases is None:
             self.__read_only_databases = {}
@@ -243,42 +243,43 @@ class _ConfigFeatures(object):
             'stereo': True,
             '_test_disabled_feature': False,
             '_test_enabled_feature': True,
+            'restrict_mousewheel': True,
         }
         self.__config = config
-    
+
     def enable(self, name):
         self.__config._not_finished()
         self._state[self.__validate(name)] = True
-    
+
     def disable(self, name):
         self.__config._not_finished()
         self._state[self.__validate(name)] = False
-    
+
     def __validate(self, name):
         name = unicode(name)
         if name not in self._state:
             raise ConfigException(u'Unknown feature name: %s' % name)
         return name
-    
+
     def _get(self, name):
         return self._state[name]
-    
+
     def _get_all(self):
         return dict(self._state)
 
 
 def execute_config(config_obj, config_file_or_directory):
     """Execute a config file or directory with the special environment.
-    
+
     If a directory, sets the directory-based defaults.
-    
+
     Note: does not _wait_and_validate()
     """
     env = dict(__builtin__.__dict__)
     env.update({'config': config_obj})
     if os.path.isdir(config_file_or_directory):
         execfile(os.path.join(config_file_or_directory, 'config.py'), env)
-        
+
         if not config_obj._state_filename:
             config_obj.persist_to_file(os.path.join(config_file_or_directory, 'state.json'))
         dbs_dir = os.path.join(config_file_or_directory, 'dbs-read-only')
@@ -302,7 +303,7 @@ def write_default_config(new_config_path):
     else:
         has_audio = False
         audio_rx_name = ''
-    
+
     config_text = '''\
 # This is a ShinySDR configuration file. For more information about what can
 # be put here, read the manual section on it, available from the running
@@ -336,7 +337,7 @@ config.serve_web(
     # in this file has been automatically generated from 128 random bits.
     # Set to None to not use any secret.
     root_cap='%(root_cap)s',
-    
+
     # Page title / station name
     title='ShinySDR')
 ''' % {
@@ -344,7 +345,7 @@ config.serve_web(
         'audio_comment': '' if has_audio else '# ',
         'audio_rx_name': audio_rx_name,
     }
-    
+
     os.mkdir(new_config_path)
     with open(os.path.join(new_config_path, 'config.py'), 'w') as f:
         f.write(config_text)
@@ -363,7 +364,7 @@ __all__.append('ConfigException')
 
 class ConfigTooLateException(ConfigException):
     """Indicates that a config method was called too late for it to take effect."""
-    
+
     def __init__(self):
         super(ConfigTooLateException, self).__init__('Too late to modify configuration')
 
