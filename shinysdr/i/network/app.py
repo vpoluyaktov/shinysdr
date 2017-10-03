@@ -17,7 +17,7 @@
 
 """Code defining the API that is actually exposed over HTTP."""
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, unicode_literals
 
 import os
 import urllib
@@ -32,7 +32,6 @@ from twisted.web import server
 from twisted.web import template
 from twisted.web.resource import Resource
 from twisted.web.util import Redirect
-from zope.interface import Interface
 
 import txws
 
@@ -40,10 +39,11 @@ import shinysdr.i.db
 from shinysdr.i.ephemeris import EphemerisResource
 from shinysdr.i.json import serialize
 from shinysdr.i.modes import get_modes
-from shinysdr.i.network.base import CAP_OBJECT_PATH_ELEMENT, SlashedResource, UNIQUE_PUBLIC_CAP, deps_path, prepath_escaped, renderElement, static_resource_path, endpoint_string_to_url, template_path
+from shinysdr.i.network.base import CAP_OBJECT_PATH_ELEMENT, SlashedResource, UNIQUE_PUBLIC_CAP, deps_path, prepath_escaped, static_resource_path, endpoint_string_to_url, template_filepath
 from shinysdr.i.network.export_http import BlockResource, CapAccessResource, FlowgraphVizResource
 from shinysdr.i.network.export_ws import OurStreamProtocol
 from shinysdr.i.poller import the_poller
+from shinysdr.interfaces import _IClientResourceDef
 from shinysdr.twisted_ext import FactoryWithArgs
 from shinysdr.values import SubscriptionContext
 
@@ -54,26 +54,18 @@ def not_deletable():
     raise Exception('Attempt to delete session root')
 
 
-class IClientResourceDef(Interface):
-    """
-    Client plugin interface object
-    """
-    # Only needed to make the plugin system work
-    # TODO write interface methods anyway
-
-
 def _make_static_resource(pathname):
     # str() because if we happen to pass unicode as the pathname then directory listings break (discovered with Twisted 16.4.1).
     r = static.File(str(pathname),
-        defaultType='text/plain',
-        ignoredExts=['.html'])
-    r.contentTypes['.csv'] = 'text/csv'
-    r.indexNames = ['index.html']
+        defaultType=b'text/plain',
+        ignoredExts=[b'.html'])
+    r.contentTypes[b'.csv'] = b'text/csv'
+    r.indexNames = [b'index.html']
     return r
 
 
 class _RadioIndexHtmlElement(template.Element):
-    loader = template.XMLFile(os.path.join(template_path, 'index.template.xhtml'))
+    loader = template.XMLFile(template_filepath.child('index.template.xhtml'))
     
     def __init__(self, wcommon, title):
         super(_RadioIndexHtmlElement, self).__init__()
@@ -101,7 +93,7 @@ class _RadioIndexHtmlResource(Resource):
         self.__element = _RadioIndexHtmlElement(wcommon, title)
 
     def render_GET(self, request):
-        return renderElement(request, self.__element)
+        return template.renderElement(request, self.__element)
 
 
 class WebAppManifestResource(Resource):
@@ -146,9 +138,9 @@ class WebService(Service):
     # TODO: Too many parameters
     def __init__(self, reactor, cap_table, read_only_dbs, writable_db, http_endpoint, ws_endpoint, root_cap, title, flowgraph_for_debug):
         # Constants
-        self.__http_endpoint_string = http_endpoint
-        self.__http_endpoint = endpoints.serverFromString(reactor, http_endpoint)
-        self.__ws_endpoint = endpoints.serverFromString(reactor, ws_endpoint)
+        self.__http_endpoint_string = str(http_endpoint)
+        self.__http_endpoint = endpoints.serverFromString(reactor, self.__http_endpoint_string)
+        self.__ws_endpoint = endpoints.serverFromString(reactor, str(ws_endpoint))
         self.__visit_path = _make_cap_url(root_cap)
         
         wcommon = WebServiceCommon(ws_endpoint_string=ws_endpoint)
@@ -249,7 +241,7 @@ def _put_plugin_resources(client_resource):
     mode_table = {}
     plugin_resources = Resource()
     client_resource.putChild('plugins', plugin_resources)
-    for resource_def in getPlugins(IClientResourceDef, shinysdr.plugins):
+    for resource_def in getPlugins(_IClientResourceDef, shinysdr.plugins):
         # Add the plugin's resource to static serving
         plugin_resources.putChild(resource_def.key, resource_def.resource)
         plugin_resource_url = '/client/plugins/' + urllib.quote(resource_def.key, safe='') + '/'
@@ -270,7 +262,7 @@ def _put_plugin_resources(client_resource):
         u'css': load_list_css,
         u'js': load_list_js,
         u'modes': mode_table,
-    }).encode('utf-8'), 'application/json'))
+    }).encode('utf-8'), b'application/json'))
 
 
 class SessionResource(SlashedResource):
@@ -302,16 +294,16 @@ class _SiteWithHeaders(server.Site):
         """overrides Site"""
         # TODO remove unsafe-inline (not that it really matters as we are not doing sloppy templating)
         # TODO: Once we know our own hostname(s), or if we start using the same port for WebSockets, tighten the connect-src policy
-        request.setHeader('Content-Security-Policy', ';'.join([
-            "default-src 'self' 'unsafe-inline'",
-            "connect-src 'self' ws://*:* wss://*:*",
-            "img-src 'self' data: blob:",
-            "object-src 'none'",
-            "base-uri 'self'",
-            "block-all-mixed-content",
+        request.setHeader(b'Content-Security-Policy', b';'.join([
+            b"default-src 'self' 'unsafe-inline'",
+            b"connect-src 'self' ws://*:* wss://*:*",
+            b"img-src 'self' data: blob:",
+            b"object-src 'none'",
+            b"base-uri 'self'",
+            b"block-all-mixed-content",
         ]))
-        request.setHeader('Referrer-Policy', 'no-referrer')
-        request.setHeader('X-Content-Type-Options', 'nosniff')
+        request.setHeader(b'Referrer-Policy', b'no-referrer')
+        request.setHeader(b'X-Content-Type-Options', b'nosniff')
         return server.Site.getResourceFor(self, request)
 
 
@@ -323,10 +315,10 @@ class WebServiceCommon(object):
     def make_websocket_url(self, request, path):
         return endpoint_string_to_url(self.__ws_endpoint_string,
             hostname=request.getRequestHostname(),
-            scheme='ws',
+            scheme=b'ws',
             path=path)
 
 
 def _make_cap_url(cap):
     assert isinstance(cap, unicode)
-    return '/' + urllib.quote(cap.encode('utf-8'), safe='') + '/'
+    return b'/' + urllib.quote(cap.encode('utf-8'), safe='') + b'/'
