@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, unicode_literals
 
 import json
 import os
@@ -27,7 +27,6 @@ import textwrap
 
 from twisted.trial import unittest
 from twisted.internet import reactor
-from twisted.web import client
 from twisted.web import http
 from twisted.web import server
 
@@ -221,7 +220,29 @@ class TestDirectory(unittest.TestCase):
         self.assertIn('Error opening database directory', str(diagnostics[0][1]))
 
 
-class TestDBWeb(unittest.TestCase):
+class TestDatabasesResource(unittest.TestCase):
+    def setUp(self):
+        db_model = db.DatabaseModel(reactor, {}, writable=True)
+        dbs_resource = db.DatabasesResource({'foo&bar': db_model})
+        self.port = reactor.listenTCP(0, server.Site(dbs_resource), interface="127.0.0.1")  # pylint: disable=no-member
+    
+    def tearDown(self):
+        return self.port.stopListening()
+    
+    def __url(self, path):
+        return 'http://127.0.0.1:%i%s' % (self.port.getHost().port, path)
+    
+    def test_index_response(self):
+        def callback((response, data)):
+            self.assertEqual(response.headers.getRawHeaders('Content-Type'), ['text/html'])
+            # TODO: Actually parse/check-that-parses the document
+            self.assertSubstring(textwrap.dedent('''\
+                <li><a href="foo%26bar/">foo&amp;bar</a></li>
+            '''), data)
+        return testutil.http_get(reactor, self.__url('/')).addCallback(callback)
+
+
+class TestDatabaseResource(unittest.TestCase):
     test_records = {
         1: db.normalize_record({
             u'type': u'channel',
@@ -248,10 +269,9 @@ class TestDBWeb(unittest.TestCase):
     }
     
     def setUp(self):
-        # pylint: disable=no-member
         db_model = db.DatabaseModel(reactor, dict(self.test_records), writable=True)
         dbResource = db.DatabaseResource(db_model)
-        self.port = reactor.listenTCP(0, server.Site(dbResource), interface="127.0.0.1")
+        self.port = reactor.listenTCP(0, server.Site(dbResource), interface="127.0.0.1")  # pylint: disable=no-member
     
     def tearDown(self):
         return self.port.stopListening()
@@ -294,11 +314,11 @@ class TestDBWeb(unittest.TestCase):
                 print data
             self.assertEqual(response.code, http.NO_CONTENT)
             
-            def check(s):
-                j = json.loads(s)
+            def check((read_response, read_data)):
+                j = json.loads(read_data)
                 self.assertEqual(j[u'records'], modified)
             
-            return client.getPage(self.__url('/')).addCallback(check)
+            return testutil.http_get(reactor, self.__url('/')).addCallback(check)
         d.addCallback(proceed)
         return d
 
@@ -320,10 +340,10 @@ class TestDBWeb(unittest.TestCase):
             url = 'ONLYONE'.join(response.headers.getRawHeaders('Location'))
             self.assertEqual(url, self.__url('/3'))  # URL of new entry
             
-            def check(s):
-                j = json.loads(s)
+            def check((read_response, read_data)):
+                j = json.loads(read_data)
                 self.assertEqual(j[u'records'][u'3'], db.normalize_record(new_record))
             
-            return client.getPage(self.__url('/')).addCallback(check)
+            return testutil.http_get(reactor, self.__url('/')).addCallback(check)
         d.addCallback(proceed)
         return d

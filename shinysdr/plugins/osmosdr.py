@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, unicode_literals
 
 from zope.interface import implementer  # available via Twisted
 
@@ -215,12 +215,13 @@ def OsmoSDRDevice(
     See documentation in shinysdr/i/webstatic/manual/configuration.html.
     """
     # The existence of the correction_ppm parameter is a workaround for the current inability to dynamically change an exported field's type (the frequency range), allowing them to be initialized early enough, in the configuration, to take effect. (Well, it's also nice to hardcode them in the config if you want to.)
+    osmo_device = str(osmo_device)  # ensure not unicode type as we talk to byte-oriented C++
     if name is None:
         name = 'OsmoSDR %s' % osmo_device
     if profile is None:
         profile = profile_from_device_string(osmo_device)
     
-    source = osmosdr.source('numchan=1 ' + osmo_device)
+    source = osmosdr.source(b'numchan=1 ' + osmo_device)
     if source.get_num_channels() < 1:
         # osmosdr.source doesn't throw an exception, allegedly because gnuradio can't handle it in a hier_block2 initializer. But we want to fail understandably, so recover by detecting it (sample rate = 0, which is otherwise nonsense)
         raise LookupError('OsmoSDR device not found (device string = %r)' % osmo_device)
@@ -283,7 +284,7 @@ class _OsmoSDRRXDriver(ExportedState, gr.hier_block2):
             name,
             tuning):
         gr.hier_block2.__init__(
-            self, 'RX ' + name,
+            self, b'RX ' + str(name),
             gr.io_signature(0, 0, 0),
             gr.io_signature(1, 1, gr.sizeof_gr_complex * 1),
         )
@@ -297,7 +298,7 @@ class _OsmoSDRRXDriver(ExportedState, gr.hier_block2):
         
         self.connect(self.__source, self)
         
-        self.__gains = Gains(source)
+        self.__gains = Gains(source, self)
         
         # Misc state
         self.dc_state = DCOffsetOff
@@ -359,6 +360,8 @@ class _OsmoSDRRXDriver(ExportedState, gr.hier_block2):
     @setter
     def set_gain(self, value):
         self.__source.set_gain(float(value), ch)
+        # The single gain and individual-stage gain controls have an unspecified relationship to each other. Thus, changing one must poll the other.
+        self.__gains.state_changed()
     
     @exported_value(
         type_fn=lambda self: bool if self.__profile.agc else ConstantT(False),
@@ -450,7 +453,7 @@ class _OsmoSDRRXDriver(ExportedState, gr.hier_block2):
         self.__source = osmosdr.source('numchan=1 ' + self.__osmo_device)
         self.__source.set_sample_rate(self.__signal_type.get_sample_rate())
         self.__tuning.set_block(self.__source)
-        self.__gains = Gains(self.__source)
+        self.__gains = Gains(self.__source, self)
         self.connect(self.__source, self)
         self.state_from_json(self.__state_while_inactive)
 
@@ -464,7 +467,7 @@ class _OsmoSDRTXDriver(ExportedState, gr.hier_block2):
             tuning,
             sample_rate):
         gr.hier_block2.__init__(
-            self, 'TX ' + name,
+            self, b'TX ' + str(name),
             gr.io_signature(1, 1, gr.sizeof_gr_complex),
             gr.io_signature(0, 0, 0))
         
@@ -518,33 +521,39 @@ class _OsmoSDRTXDriver(ExportedState, gr.hier_block2):
 
 
 class Gains(ExportedState):
-    def __init__(self, source):
-        self.__sourceref = [source]
+    def __init__(self, source, rxd):
+        self.__source_ref = [source]
+        self.__rxd_ref = [rxd]
     
-    # be able to drop source ref
+    # be able to drop source ref even from the cells
     def close(self):
-        self.__sourceref[0] = None
+        self.__source_ref[0] = None
+        self.__rxd_ref[0] = None
     
     def state_def(self):
         for d in super(Gains, self).state_def():
             yield d
-        sourceref = self.__sourceref
-        for name in sourceref[0].get_gain_names():
+        source_ref = self.__source_ref
+        for name in source_ref[0].get_gain_names():
             # use a function to close over name
-            yield _install_gain_cell(self, sourceref, name)
+            yield _install_gain_cell(self, source_ref, self.__rxd_ref, name)
 
 
-def _install_gain_cell(self, sourceref, name):
+def _install_gain_cell(self, source_ref, rxd_ref, name):
     def gain_getter():
-        source = sourceref[0]
+        source = source_ref[0]
         return 0 if source is None else source.get_gain(name, ch)
     
     def gain_setter(value):
-        source = sourceref[0]
+        source = source_ref[0]
         if source is not None:
             source.set_gain(float(value), name, ch)
+        rxd = rxd_ref[0]
+        if rxd is not None:
+            # The single gain and individual-stage gain controls have an unspecified relationship to each other. Thus, changing one must poll the other.
+            rxd.state_changed('gain')
     
-    gain_range = convert_osmosdr_range(sourceref[0].get_gain_range(name, ch), unit=units.dB)
+    gain_range = convert_osmosdr_range(source_ref[0].get_gain_range(name, ch), unit=units.dB)
     
     # TODO: There should be a type of Cell such that we don't have to setattr but still implement the storage unlike LooseCell
     setattr(self, 'get_' + name, gain_getter)

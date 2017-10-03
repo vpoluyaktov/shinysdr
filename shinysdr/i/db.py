@@ -15,9 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with ShinySDR.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import, division
+from __future__ import absolute_import, division, unicode_literals
 
-import cgi
 import contextlib
 import csv
 import json
@@ -28,8 +27,10 @@ import urllib
 from twisted.python import log
 from twisted.web import http
 from twisted.web import resource
+from twisted.web import template
 
 from shinysdr.types import EnumT, to_value_type
+from shinysdr.i.network.base import template_filepath
 
 
 _NO_DEFAULT = object()
@@ -148,15 +149,25 @@ class _DbsIndexResource(resource.Resource):
     
     def __init__(self, dbs_resource):
         resource.Resource.__init__(self)
-        self.dbs_resource = dbs_resource
-    
+        self.__element = _DbsIndexListElement(dbs_resource)
+
     def render_GET(self, request):
-        request.setHeader('Content-Type', 'text/html')
-        request.write('<html><title>Databases</title><ul>')
-        for name in self.dbs_resource.names:
-            request.write('<li><a href="%s/">%s</a>' % (cgi.escape(urllib.quote(name, '')), name))
-        request.write('</ul>')
-        return ''
+        return template.renderElement(request, self.__element)
+
+
+class _DbsIndexListElement(template.Element):
+    loader = template.XMLFile(template_filepath.child('database-list.template.xhtml'))
+    
+    def __init__(self, dbs_resource):
+        super(_DbsIndexListElement, self).__init__()
+        self.__dbs_resource = dbs_resource
+    
+    @template.renderer
+    def list_items(self, request, tag):
+        for db_name in self.__dbs_resource.names:
+            yield tag.clone().fillSlots(
+                db_name=db_name,
+                db_url='{}/'.format(urllib.quote(db_name, '')))
 
 
 class DatabaseResource(resource.Resource):
@@ -182,7 +193,7 @@ class _DbIndexResource(resource.Resource):
         self.__instantiate = instantiate
     
     def render_GET(self, request):
-        request.setHeader('Content-Type', 'application/json')
+        request.setHeader(b'Content-Type', b'application/json')
         return json.dumps({
             u'records': self.__database.records,
             u'writable': self.__database.writable
@@ -192,8 +203,8 @@ class _DbIndexResource(resource.Resource):
         desc = json.load(request.content)
         if not self.__database.writable:
             request.setResponseCode(http.FORBIDDEN)
-            request.setHeader('Content-Type', 'text/plain')
-            return 'This database is not writable.'
+            request.setHeader(b'Content-Type', b'text/plain')
+            return b'This database is not writable.'
         record = normalize_record(desc['new'])
 
         dbdict = self.__database.records
@@ -205,8 +216,8 @@ class _DbIndexResource(resource.Resource):
         self.__instantiate(rkey)
         url = request.prePathURL() + str(rkey)
         request.setResponseCode(http.CREATED)
-        request.setHeader('Content-Type', 'text/plain')
-        request.setHeader('Location', url)
+        request.setHeader(b'Content-Type', b'text/plain')
+        request.setHeader(b'Location', url)
         return url
 
 
@@ -219,14 +230,14 @@ class _RecordResource(resource.Resource):
         self.__record = record
     
     def render_GET(self, request):
-        request.setHeader('Content-Type', 'application/json')
+        request.setHeader(b'Content-Type', b'application/json')
         return json.dumps(self.__record)
     
     def render_POST(self, request):
-        assert request.getHeader('Content-Type') == 'application/json'
+        assert request.getHeader(b'Content-Type') == b'application/json'
         if not self.__database.writable:
             request.setResponseCode(http.FORBIDDEN)
-            request.setHeader('Content-Type', 'text/plain')
+            request.setHeader(b'Content-Type', b'text/plain')
             return 'The database containing this record is not writable.'
         patch = json.load(request.content)
         old = normalize_record(patch['old'])
@@ -236,11 +247,11 @@ class _RecordResource(resource.Resource):
             self.__record.update(new)
             self.__database.dirty()
             request.setResponseCode(http.NO_CONTENT)
-            return ''
+            return b''
         else:
             request.setResponseCode(http.CONFLICT)
-            request.setHeader('Content-Type', 'text/plain')
-            return 'Old values did not match: %r vs %r' % (old, self.__record)
+            request.setHeader(b'Content-Type', b'text/plain')
+            return b'Old values did not match: %r vs %r' % (old, self.__record)
 
 
 def _parse_csv_file(csvfile):
