@@ -498,7 +498,7 @@ define([
         target.set(clamp(direction * scale + target.get(), direction));
       }
 
-      if (!config.features['restrict_mousewheel']) {
+      if (false /*!config.features['restrict_mousewheel']*/) {
         digit.addEventListener("mousewheel", function(event) { // Not in FF
           // TODO: deal with high-res/accelerated scrolling
           spin(event.wheelDelta > 0 ? 1 : -1);

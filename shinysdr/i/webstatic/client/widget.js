@@ -80,7 +80,7 @@ define([
     // TODO reconsider this unusual handling. Required to avoid miscellaneous things needing to define a coordinator.
     this.coordinator = config.coordinator || new Coordinator(this.scheduler, this.freqDB, this.radioCell);
     this.actionCompleted = config.actionCompleted || function actionCompletedNoop() {};
-    this.restrict_mousewheel = config.features['restrict_mousewheel']
+    // this.restrict_mousewheel = config.features['restrict_mousewheel']
     Object.freeze(this);
   }
   Context.prototype.withSpectrumView = function (outerElement, innerElement, monitor, isRFSpectrum) {
@@ -556,7 +556,7 @@ define([
         // Horizontal scrolling (or diagonal w/ useless vertical component): if hits edge, change frequency.
         if (event.wheelDeltaX > 0 && cacheScrollLeft === 0
             || event.wheelDeltaX < 0 && cacheScrollLeft === (container.scrollWidth - container.clientWidth)) {
-          if (!this.restrict_mousewheel && isRFSpectrum) {
+          if (/*!this.restrict_mousewheel*/ false && isRFSpectrum) {
             var freqCell = radioCell.get().source.get().freq;
             freqCell.set(freqCell.get() + (event.wheelDeltaX * -0.12) / pixelsPerHertz);
           }
