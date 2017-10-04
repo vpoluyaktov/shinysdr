@@ -29,29 +29,21 @@ from twisted.plugin import getPlugins
 from twisted.python import log
 from twisted.web import static
 from twisted.web import server
-from twisted.web import template
 from twisted.web.resource import Resource
 from twisted.web.util import Redirect
 
 import txws
 
 import shinysdr.i.db
-from shinysdr.i.ephemeris import EphemerisResource
 from shinysdr.i.json import serialize
 from shinysdr.i.modes import get_modes
-from shinysdr.i.network.base import CAP_OBJECT_PATH_ELEMENT, SlashedResource, UNIQUE_PUBLIC_CAP, deps_path, prepath_escaped, static_resource_path, endpoint_string_to_url, template_filepath
-from shinysdr.i.network.export_http import BlockResource, CapAccessResource, FlowgraphVizResource
+from shinysdr.i.network.base import IWebEntryPoint, SlashedResource, UNIQUE_PUBLIC_CAP, WebServiceCommon, deps_path, static_resource_path, endpoint_string_to_url
+from shinysdr.i.network.export_http import CapAccessResource
 from shinysdr.i.network.export_ws import OurStreamProtocol
 from shinysdr.i.poller import the_poller
 from shinysdr.interfaces import _IClientResourceDef
 from shinysdr.twisted_ext import FactoryWithArgs
 from shinysdr.values import SubscriptionContext
-
-
-def not_deletable():
-    # TODO audit uses of this function
-    # TODO plumb up a user-friendly (proper HTTP code) error
-    raise Exception('Attempt to delete session root')
 
 
 def _make_static_resource(pathname):
@@ -64,38 +56,6 @@ def _make_static_resource(pathname):
     return r
 
 
-class _RadioIndexHtmlElement(template.Element):
-    loader = template.XMLFile(template_filepath.child('index.template.xhtml'))
-    
-    def __init__(self, wcommon, title):
-        super(_RadioIndexHtmlElement, self).__init__()
-        self.__wcommon = wcommon
-        self.__title = unicode(title)
-    
-    @template.renderer
-    def title(self, request, tag):
-        return tag(self.__title)
-
-    @template.renderer
-    def quoted_state_url(self, request, tag):
-        return tag(serialize(self.__wcommon.make_websocket_url(request, prepath_escaped(request) + CAP_OBJECT_PATH_ELEMENT)))
-
-    @template.renderer
-    def quoted_audio_url(self, request, tag):
-        return tag(serialize(self.__wcommon.make_websocket_url(request, prepath_escaped(request) + 'audio')))
-
-
-class _RadioIndexHtmlResource(Resource):
-    isLeaf = True
-
-    def __init__(self, wcommon, title):
-        Resource.__init__(self)
-        self.__element = _RadioIndexHtmlElement(wcommon, title)
-
-    def render_GET(self, request):
-        return template.renderElement(request, self.__element)
-
-
 class WebAppManifestResource(Resource):
     """
     Per https://www.w3.org/TR/appmanifest/
@@ -103,9 +63,9 @@ class WebAppManifestResource(Resource):
     
     isLeaf = True
     
-    def __init__(self, wcommon, title):
+    def __init__(self, wcommon):
         Resource.__init__(self)
-        self.__title = title
+        self.__title = wcommon.title
 
     def render_GET(self, request):
         request.setHeader(b'Content-Type', b'application/manifest+json')
@@ -136,22 +96,26 @@ class WebAppManifestResource(Resource):
 
 class WebService(Service):
     # TODO: Too many parameters
-    def __init__(self, reactor, cap_table, read_only_dbs, writable_db, http_endpoint, ws_endpoint, root_cap, title, flowgraph_for_debug):
+    def __init__(self, reactor, cap_table, http_endpoint, ws_endpoint, root_cap, title):
         # Constants
         self.__http_endpoint_string = str(http_endpoint)
         self.__http_endpoint = endpoints.serverFromString(reactor, self.__http_endpoint_string)
         self.__ws_endpoint = endpoints.serverFromString(reactor, str(ws_endpoint))
         self.__visit_path = _make_cap_url(root_cap)
         
-        wcommon = WebServiceCommon(ws_endpoint_string=ws_endpoint)
+        wcommon = WebServiceCommon(
+            reactor=reactor,
+            title=title,
+            ws_endpoint_string=ws_endpoint)
         # TODO: Create poller actually for the given reactor w/o redundancy -- perhaps there should be a one-poller-per-reactor map
         subscription_context = SubscriptionContext(reactor=reactor, poller=the_poller)
         
-        def BoundSessionResource(session):
-            return SessionResource(session, wcommon, reactor, title, read_only_dbs, writable_db, flowgraph_for_debug)
+        def resource_factory(entry_point):
+            # TODO: If not an IWebEntryPoint, return a generic result
+            return IWebEntryPoint(entry_point).get_entry_point_resource(wcommon=wcommon)  # pylint: disable=redundant-keyword-arg
         
-        server_root = CapAccessResource(cap_table=cap_table, resource_ctor=BoundSessionResource)
-        _put_root_static(wcommon, server_root, title)
+        server_root = CapAccessResource(cap_table=cap_table, resource_factory=resource_factory)
+        _put_root_static(wcommon, server_root)
         
         if UNIQUE_PUBLIC_CAP in cap_table:
             # TODO: consider factoring out "generate URL for cap"
@@ -205,7 +169,7 @@ class WebService(Service):
             log.msg('Visit ' + url)
 
 
-def _put_root_static(wcommon, container_resource, title):
+def _put_root_static(wcommon, container_resource):
     """Place all the simple resources, that are not necessarily sourced from files but at least are unchanging and public."""
     
     for name in ['', 'client', 'test', 'manual', 'tools']:
@@ -230,7 +194,7 @@ def _put_root_static(wcommon, container_resource, title):
     container_resource.putChild('favicon.ico',
         _make_static_resource(os.path.join(static_resource_path, 'client/icon/icon-32.png')))
     client.putChild('web-app-manifest.json',
-        WebAppManifestResource(wcommon, title))
+        WebAppManifestResource(wcommon))
     _put_plugin_resources(client)
 
 
@@ -265,28 +229,6 @@ def _put_plugin_resources(client_resource):
     }).encode('utf-8'), b'application/json'))
 
 
-class SessionResource(SlashedResource):
-    # TODO Too many parameters; some of this stuff shouldn't be per-session in the same way
-    def __init__(self, session, wcommon, reactor, title, read_only_dbs, writable_db, flowgraph_for_debug):
-        SlashedResource.__init__(self)
-        
-        # UI entry point
-        self.putChild('', _RadioIndexHtmlResource(wcommon=wcommon, title=title))
-        
-        # Exported radio control objects
-        self.putChild(CAP_OBJECT_PATH_ELEMENT, BlockResource(session, wcommon, not_deletable))
-        
-        # Frequency DB
-        self.putChild('dbs', shinysdr.i.db.DatabasesResource(read_only_dbs))
-        self.putChild('wdb', shinysdr.i.db.DatabaseResource(writable_db))
-        
-        # Debug graph
-        self.putChild('flow-graph', FlowgraphVizResource(reactor, flowgraph_for_debug))
-        
-        # Ephemeris
-        self.putChild('ephemeris', EphemerisResource())
-
-
 class _SiteWithHeaders(server.Site):
     """Subclass of Site which provides some default headers for all resources."""
     
@@ -305,18 +247,6 @@ class _SiteWithHeaders(server.Site):
         request.setHeader(b'Referrer-Policy', b'no-referrer')
         request.setHeader(b'X-Content-Type-Options', b'nosniff')
         return server.Site.getResourceFor(self, request)
-
-
-class WebServiceCommon(object):
-    """Ugly collection of stuff web resources need which is not noteworthy authority."""
-    def __init__(self, ws_endpoint_string):
-        self.__ws_endpoint_string = ws_endpoint_string
-
-    def make_websocket_url(self, request, path):
-        return endpoint_string_to_url(self.__ws_endpoint_string,
-            hostname=request.getRequestHostname(),
-            scheme=b'ws',
-            path=path)
 
 
 def _make_cap_url(cap):

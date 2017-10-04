@@ -19,16 +19,18 @@
 
 from __future__ import absolute_import, division, unicode_literals
 
+import importlib
+
 from zope.interface import implementer
 
-from shinysdr.i.roots import IEntryPoint
+from shinysdr.i.network.base import IWebEntryPoint
 from shinysdr.i.top import Top
 from shinysdr.types import ReferenceT
 from shinysdr.values import ExportedState, exported_value
 
 
 class AppRoot(ExportedState):
-    def __init__(self, devices, audio_config, features):
+    def __init__(self, devices, audio_config, read_only_dbs, writable_db, features):
         self.__receive_flowgraph = Top(
             devices=devices,
             audio_config=audio_config,
@@ -36,6 +38,8 @@ class AppRoot(ExportedState):
         # TODO: only one session while we sort out other things
         self.__session = Session(
             receive_flowgraph=self.__receive_flowgraph,
+            read_only_dbs=read_only_dbs,
+            writable_db=writable_db,
             features=features)
     
     @exported_value(type=ReferenceT(), changes='never')
@@ -58,10 +62,12 @@ class AppRoot(ExportedState):
         self.__receive_flowgraph.close_all_devices()
 
 
-@implementer(IEntryPoint)
+@implementer(IWebEntryPoint)
 class Session(ExportedState):
-    def __init__(self, receive_flowgraph, features):
+    def __init__(self, receive_flowgraph, read_only_dbs, writable_db, features):
         self.__receive_flowgraph = receive_flowgraph
+        self.__read_only_dbs = read_only_dbs
+        self.__writable_db = writable_db
     
     def state_def(self):
         for d in super(Session, self).state_def():
@@ -88,6 +94,18 @@ class Session(ExportedState):
         """implements IEntryPoint"""
         # TODO stub for multisession refactoring
         return False
+    
+    def get_entry_point_resource(self, wcommon):
+        # TODO: Don't just forward args
+        return importlib.import_module('shinysdr.i.network.session_http').SessionResource(
+            session=self,
+            read_only_dbs=self.__read_only_dbs,
+            writable_db=self.__writable_db,
+            wcommon=wcommon)
+    
+    def flowgraph_for_debug(self):
+        # TODO: Quick refactoring; make this interface more sensible/faceted. Used by SessionResource
+        return self.__receive_flowgraph
     
     def add_audio_queue(self, queue, queue_rate):
         return self.__receive_flowgraph.add_audio_queue(queue, queue_rate)
