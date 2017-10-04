@@ -27,6 +27,8 @@ from twisted.internet import endpoints
 from twisted.python.filepath import FilePath
 from twisted.python.util import sibpath
 
+from shinysdr.i.roots import IEntryPoint
+
 # TODO: Change this constant to something more generic, but save that for when we're changing the URL layout for other reasons anyway.
 CAP_OBJECT_PATH_ELEMENT = b'radio'
 UNIQUE_PUBLIC_CAP = u'public'
@@ -38,6 +40,11 @@ template_filepath = FilePath(template_path)
 deps_path = sibpath(__file__, '../../deps')
 
 
+class IWebEntryPoint(IEntryPoint):
+    def get_entry_point_resource(wcommon):
+        """Returns a twisted.web.resource.IResource."""
+
+
 class SlashedResource(Resource):
     """Redirects /.../this to /.../this/."""
     
@@ -45,6 +52,20 @@ class SlashedResource(Resource):
         request.setHeader(b'Location', request.childLink(b''))
         request.setResponseCode(http.MOVED_PERMANENTLY)
         return b''
+
+
+class WebServiceCommon(object):
+    """Ugly collection of stuff web resources need which is not noteworthy authority."""
+    def __init__(self, reactor, title, ws_endpoint_string):
+        self.reactor = reactor
+        self.title = unicode(title)
+        self.__ws_endpoint_string = ws_endpoint_string
+
+    def make_websocket_url(self, request, path):
+        return endpoint_string_to_url(self.__ws_endpoint_string,
+            hostname=request.getRequestHostname(),
+            scheme=b'ws',
+            path=path)
 
 
 def endpoint_string_to_url(desc, scheme='http', hostname='localhost', path='/', listening_port=None):
