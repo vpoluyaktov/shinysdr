@@ -402,7 +402,8 @@ class _OsmoSDRRXDriver(ExportedState, gr.hier_block2):
             mode = DCOffsetAutomatic
         else:
             mode = DCOffsetOff
-        self.dc_state = self.__source.set_dc_offset_mode(mode, ch)
+        self.__source.set_dc_offset_mode(mode, ch)
+        self.dc_state = value
     
     # Note: iq_balance has a 'manual' mode we are not yet exposing
     @exported_value(type=bool,    # TODO: detect gr-iqbal
