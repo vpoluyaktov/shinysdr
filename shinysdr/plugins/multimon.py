@@ -42,6 +42,8 @@ from shinysdr.signals import SignalType
 from shinysdr.twisted_ext import test_subprocess
 from shinysdr.types import EnumT, ReferenceT
 from shinysdr.values import ExportedState, exported_value, setter
+from shinysdr.gr_ext import safe_delete_head_nowait
+from shinysdr.math import dB, rotator_inc
 
 pipe_rate = 22050  # what multimon-ng expects
 _maxint32 = 2 ** 15 - 1
@@ -263,7 +265,7 @@ class MorseDemodulator(gr.hier_block2, ExportedState):
         gr.hier_block2.__init__(
             self, type(self).__name__,
             gr.io_signature(1, 1, gr.sizeof_float * 1),
-            gr.io_signature(1, 1, gr.sizeof_float * 1),
+            gr.io_signature(1, 1, gr.sizeof_char * 1),
         )
         
         def receive(line):
@@ -279,14 +281,11 @@ class MorseDemodulator(gr.hier_block2, ExportedState):
             protocol=MorseProcessProtocol(receive),
             context=context)
         
-        self.__router = blocks.multiply_matrix_ff([[0, 0]])
-
         self.connect(
             self,
             self.__mm_demod,
-            self.__router,
+            blocks.float_to_char(vlen=4096, scale=1.0),
             self)
-        self.connect(self.__mm_demod, (self.__router, 1))
     
     def get_input_type(self):
         return self.__mm_demod.get_input_type()
@@ -298,30 +297,38 @@ class MorseDemodulator(gr.hier_block2, ExportedState):
 
 # TODO: Eliminate this class and replace it with adapters available to any demodulator
 @implementer(IDemodulator)
-class FMMorseDemodulator(gr.hier_block2, ExportedState):
+class CWMorseDemodulator(gr.hier_block2, ExportedState):
+    
+    __demod_rate = 6000
+    __spacing = 170
+    
     def __init__(self, mode, input_rate=0, context=None):
         assert input_rate > 0
         assert context is not None
         gr.hier_block2.__init__(
-            self, str(mode) + ' (FM + Multimon-NG) demodulator',
+            self, str(mode) + ' (CW + Multimon-NG) demodulator',
             gr.io_signature(1, 1, gr.sizeof_gr_complex * 1),
             gr.io_signature(1, 1, gr.sizeof_float * 1),
         )
         self.mode = mode
         self.input_rate = input_rate
-        
-        # FM demod
+
+        self.__text = u''
+        self.__char_queue = gr.msg_queue(limit=100)
+        self.__char_sink = blocks.message_sink(gr.sizeof_char, self.__char_queue, True)
+ 
+        # CW demod
         # TODO: Retry telling the NFMDemodulator to have its output rate be pipe_rate instead of using a resampler. Something went wrong when trying that before. Same thing is done in dsd.py
         self.fm_demod = NFMDemodulator(
-            mode='NFM',
+            mode='FM',
             input_rate=input_rate,
             no_audio_filter=True,  # don't remove CTCSS tone
             tau=None)  # no deemphasis
         assert self.fm_demod.get_output_type().get_kind() == 'MONO'
-        fm_audio_rate = self.fm_demod.get_output_type().get_sample_rate()
         
         # Subprocess
         self.mm_demod = MorseDemodulator(context=context)
+        fm_audio_rate = self.fm_demod.get_output_type().get_sample_rate()
         mm_audio_rate = self.mm_demod.get_input_type().get_sample_rate()
         
         # Output
@@ -330,6 +337,10 @@ class FMMorseDemodulator(gr.hier_block2, ExportedState):
             self.fm_demod,
             make_resampler(fm_audio_rate, mm_audio_rate),
             self.mm_demod,
+            self.__char_sink)
+
+        self.connect(
+            self.fm_demod,
             self)
     
     @exported_value(type=BandShape, changes='never')
@@ -339,10 +350,15 @@ class FMMorseDemodulator(gr.hier_block2, ExportedState):
     def get_output_type(self):
         return self.mm_demod.get_output_type()
     
-    @exported_value(type=ReferenceT(), changes='never')
-    def get_mm_demod(self):
-        return self.mm_demod
-
+    @exported_value(type=unicode, changes='continuous')
+    def get_text(self):
+        message = safe_delete_head_nowait(self.__char_queue)
+        if message:
+            textstring = self.__text
+            textstring += message.to_string().decode('us-ascii')
+            # TODO: Make the buffer longer and arrange so partial updates rather than the entire buffer can be sent to clients.
+            self.__text = textstring[-100:]
+        return self.__text
 
 class MorseProcessProtocol(ProcessProtocol):
     def __init__(self, target):
@@ -365,17 +381,11 @@ class MorseProcessProtocol(ProcessProtocol):
             pass
         elif line.startswith('Enabled demodulators:'):
             pass
-        elif line.startswith('$ULTW') and self.__last_line is not None:  # observed glitch in output; need to glue to previous line, I think?
-            ll = self.__last_line
-            self.__last_line = None
-            self.__target(ll + line)
-        elif line.startswith('Morse: '):
-            line = line[len('Morse: '):]
+        elif line.startswith('MAX: '):
+            print 'Morse stats: %r' % line
+        else:
             self.__last_line = line
             self.__target(line)
-        else:
-            # TODO: Log these properly
-            print 'Not Morse line: %r' % line
             
     @exported_value(type=unicode, changes='continuous')
     def get_text(self):
@@ -399,6 +409,6 @@ pluginDef_APRS = ModeDef(mode='APRS',  # TODO: Rename mode to be more accurate
 
 pluginDef_Morse = ModeDef(mode='Morse',  # TODO: Rename mode to be more accurate
     info='Morse',
-    demod_class=FMMorseDemodulator,
+    demod_class=CWMorseDemodulator,
     available=_multimon_available)
 
