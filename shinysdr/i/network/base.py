@@ -26,7 +26,10 @@ from twisted.web.resource import Resource
 from twisted.internet import endpoints
 from twisted.python.filepath import FilePath
 from twisted.python.util import sibpath
+from twisted.web import template
+from twisted.web.server import Site
 
+from shinysdr.i.json import serialize
 from shinysdr.i.roots import IEntryPoint
 
 # TODO: Change this constant to something more generic, but save that for when we're changing the URL layout for other reasons anyway.
@@ -45,6 +48,25 @@ class IWebEntryPoint(IEntryPoint):
         """Returns a twisted.web.resource.IResource."""
 
 
+class EntryPointIndexElement(template.Element):
+    """Useful base class for IWebEntryPoint's index (.../) resources.
+    
+    Subclasses should define the loader attribute and any additional template.renderers.
+    """
+    
+    def __init__(self, wcommon):
+        super(EntryPointIndexElement, self).__init__()
+        self.entry_point_wcommon = wcommon
+    
+    @template.renderer
+    def title(self, request, tag):
+        return tag(self.entry_point_wcommon.title)
+
+    @template.renderer
+    def quoted_state_url(self, request, tag):
+        return tag(serialize(self.entry_point_wcommon.make_websocket_url(request, prepath_escaped(request) + CAP_OBJECT_PATH_ELEMENT)))
+
+
 class SlashedResource(Resource):
     """Redirects /.../this to /.../this/."""
     
@@ -54,18 +76,57 @@ class SlashedResource(Resource):
         return b''
 
 
+class ElementRenderingResource(Resource):
+    """Resource which just renders a specified template element."""
+    def __init__(self, element):
+        Resource.__init__(self)
+        self.__element = element
+
+    def render_GET(self, request):
+        request.setHeader(b'Content-Type', b'text/html;charset=utf-8')
+        return template.renderElement(request, self.__element)
+
+
 class WebServiceCommon(object):
     """Ugly collection of stuff web resources need which is not noteworthy authority."""
+    
+    @classmethod
+    def stub(cls, reactor):
+        return cls(
+            reactor=reactor,
+            title='[ShinySDR Test Server]',
+            ws_endpoint_string='tcp:99999')  # parseable but nonsense
+    
     def __init__(self, reactor, title, ws_endpoint_string):
         self.reactor = reactor
         self.title = unicode(title)
         self.__ws_endpoint_string = ws_endpoint_string
-
+    
     def make_websocket_url(self, request, path):
         return endpoint_string_to_url(self.__ws_endpoint_string,
             hostname=request.getRequestHostname(),
             scheme=b'ws',
             path=path)
+
+
+class SiteWithDefaultHeaders(Site):
+    """Subclass of Site which provides some default security-improving headers for all resources."""
+    
+    def getResourceFor(self, request):
+        """overrides Site"""
+        # TODO remove unsafe-inline (not that it really matters as we are not doing sloppy templating)
+        # TODO: Once we know our own hostname(s), or if we start using the same port for WebSockets, tighten the connect-src policy
+        request.setHeader(b'Content-Security-Policy', b';'.join([
+            b"default-src 'self' 'unsafe-inline'",
+            b"connect-src 'self' ws://*:* wss://*:*",
+            b"img-src 'self' data: blob:",
+            b"object-src 'none'",
+            b"base-uri 'self'",
+            b"block-all-mixed-content",
+        ]))
+        request.setHeader(b'Referrer-Policy', b'no-referrer')
+        request.setHeader(b'X-Content-Type-Options', b'nosniff')
+        return Site.getResourceFor(self, request)
 
 
 def endpoint_string_to_url(desc, scheme='http', hostname='localhost', path='/', listening_port=None):

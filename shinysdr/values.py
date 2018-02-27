@@ -56,7 +56,7 @@ class CellMetadata(namedtuple('CellMetadata', [
 class SubscriptionContext(namedtuple('SubscriptionContext', ['reactor', 'poller'])):
     """A SubscriptionContext is used when subscribing to a cell.
     
-    The context's reactor and poller determine how and when the subscription callback is invoked once the cell value has changed.
+    The context's reactor and poller determine how and when the subscriber is invoked once the cell value has changed.
     
     reactor: twisted.internet.interfaces.IReactorTime
     poller: shinysdr.i.poller.Poller
@@ -76,7 +76,7 @@ class ISubscriber(Interface):
     # pylint: disable=arguments-differ, signature-differs
     """The callback to be passed to cell.subscribe2().
     
-    This interface exists for documentation purposes; callbacks are not required to explicitly provide it.
+    This interface exists for documentation purposes; subscribers are not required to explicitly provide it.
     """
     
     def __call__(value):
@@ -168,14 +168,14 @@ class BaseCell(object):
         else:
             self.set(state)
     
-    def subscribe2(self, callback, context):
+    def subscribe2(self, subscriber, context):
         # TODO: 'subscribe2' name is temporary for easy distinguishing this from other 'subscribe' protocols.
         """Request to be notified when this cell's value changes.
         
-        callback: an ISubscriber; called repeatedly with successive new cell values; never immediately.
+        subscriber: an ISubscriber; called repeatedly with successive new cell values; never immediately.
         context: a SubscriptionContext.
 
-        Returns an ISubscription, which has an `unsubscribe` method which will remove the subscription.
+        Returns a tuple of the current value and an ISubscription, which has an `unsubscribe` method which will remove the subscription.
         """
         raise NotImplementedError(self)
     
@@ -207,7 +207,7 @@ class ValueCell(BaseCell):
         return d
 
 
-# The possible values of the 'changes' parameter to a cell of type Cell, which determine when the cell's getter is polled to check for changes.
+# The possible values of the 'changes' parameter to a cell of type PollingCell, which determine when the cell's getter is polled to check for changes.
 _cell_value_change_schedules = [
     u'never',  # never changes at all for the lifetime of the cell
     u'continuous',  # a different value almost every time
@@ -216,10 +216,13 @@ _cell_value_change_schedules = [
 ]
 
 
-# TODO this name is historical and should be changed
-class Cell(ValueCell, TargetingMixin):
+class PollingCell(ValueCell, TargetingMixin):
+    __explicit_subscriptions = None
+    __last_polled_value = None
+    __setter = None
+    
     def __init__(self, target, key, changes, type=object, writable=False, persists=None, **kwargs):
-        assert changes in _cell_value_change_schedules  # TODO actually use value
+        assert changes in _cell_value_change_schedules
         type = to_value_type(type)
         if persists is None:
             persists = writable or type.is_reference()
@@ -242,14 +245,12 @@ class Cell(ValueCell, TargetingMixin):
             self.__explicit_subscriptions = set()
             self.__last_polled_value = object()
         
-        self._getter = getattr(self._target, 'get_' + key)
+        self.__getter = getattr(self._target, 'get_' + key)
         if writable:
-            self._setter = getattr(self._target, 'set_' + key)
-        else:
-            self._setter = None
+            self.__setter = getattr(self._target, 'set_' + key)
     
     def get(self):
-        value = self._getter()
+        value = self.__getter()
         if self.type().is_reference():
             # informative-failure debugging aid
             assert isinstance(value, ExportedState), (self._target, self._key)
@@ -258,21 +259,23 @@ class Cell(ValueCell, TargetingMixin):
     def set(self, value):
         if not self.isWritable():
             raise Exception('Not writable.')
-        return self._setter(self.metadata().value_type(value))
+        return self.__setter(self.metadata().value_type(value))
     
-    def subscribe2(self, callback, context):
+    def subscribe2(self, subscriber, context):
         changes = self.__changes
         if changes == u'never':
-            return _NeverSubscription()
+            subscription = _NeverSubscription()
         elif changes == u'continuous':
-            return context.poller.subscribe(self, callback, fast=True)
+            subscription = context.poller.subscribe(self, subscriber, fast=True)
         elif changes == u'explicit' or changes == u'this_setter':
-            return _SimpleSubscription(callback, context, self.__explicit_subscriptions)
+            subscription = _SimpleSubscription(subscriber, context, self.__explicit_subscriptions)
         else:
             raise ValueError('shouldn\'t happen unrecognized changes value: {!r}'.format(changes))
+        return self.get(), subscription
 
     def poll_for_change(self, specific_cell):
-        if not hasattr(self, '_Cell__explicit_subscriptions'):
+        if self.__explicit_subscriptions is None:
+            # Note that this is "we are not a kind of cell that has explicit subscriptions", not "we have no subscriptions". Doing the latter would mean that a new subscription might fire after subscribing not because the value actually changed but only because poll_for_changed was called.
             return
         value = self.get()
         if value != self.__last_polled_value:
@@ -351,9 +354,9 @@ class StreamCell(ValueCell, TargetingMixin):
         self.__dgetter = getattr(self._target, 'get_' + key + '_distributor')
         self.__igetter = getattr(self._target, 'get_' + key + '_info')
     
-    def subscribe2(self, callback, context):
+    def subscribe2(self, subscriber, context):
         # poller does StreamCell-specific things. TODO: make Poller uninvolved
-        return context.poller.subscribe(self, callback, fast=True)
+        return self.get(), context.poller.subscribe(self, subscriber, fast=True)
     
     # TODO: eliminate this specialized protocol used by Poller
     def subscribe_to_stream(self):
@@ -423,40 +426,39 @@ class LooseCell(ValueCell):
         for subscription in self.__subscriptions:
             subscription._fire(value)
     
-    def subscribe2(self, callback, context):
-        subscription = _SimpleSubscription(callback, context, self.__subscriptions)
-        return subscription
+    def subscribe2(self, subscriber, context):
+        return self.get(), _SimpleSubscription(subscriber, context, self.__subscriptions)
     
-    def _subscribe_immediate(self, callback):
+    def _subscribe_immediate(self, subscriber):
         """for use by ViewCell only"""
         # TODO: replace this with a better mechanism
-        subscription = _LooseCellImmediateSubscription(callback, self.__subscriptions)
+        subscription = _LooseCellImmediateSubscription(subscriber, self.__subscriptions)
         return subscription
 
 
 @implementer(ISubscription)
 class _SimpleSubscription(object):
-    def __init__(self, callback, context, subscription_set):
-        self.__callback = callback
+    def __init__(self, subscriber, context, subscription_set):
+        self.__subscriber = subscriber
         self.__reactor = context.reactor
         self.__subscription_set = subscription_set
         subscription_set.add(self)
     
     def _fire(self, value):
         # TODO: This is calling with a maybe-stale-when-it-arrives value. Do we want to tighten up and prohibit that in the specification of subscribe2?
-        self.__reactor.callLater(0, self.__callback, value)
+        self.__reactor.callLater(0, self.__subscriber, value)
     
     def unsubscribe(self):
         self.__subscription_set.remove(self)
     
     def __repr__(self):
-        return u'<{} calling {}>'.format(type(self).__name__, self.__callback)
+        return u'<{} calling {}>'.format(type(self).__name__, self.__subscriber)
 
 
 @implementer(ISubscription)
 class _LooseCellImmediateSubscription(object):
-    def __init__(self, callback, subscription_set):
-        self._fire = callback
+    def __init__(self, subscriber, subscription_set):
+        self._fire = subscriber
         self.__subscription_set = subscription_set
         subscription_set.add(self)
     
@@ -535,9 +537,9 @@ class Command(BaseCell):
         # TODO: Make a separate command-triggering path, because this is a HORRIBLE KLUDGE.
         self.__function()
     
-    def subscribe2(self, callback, context):
+    def subscribe2(self, subscriber, context):
         """implements BaseCell"""
-        return _NeverSubscription()
+        return self.get(), _NeverSubscription()
 
 
 @implementer(ISubscription)
@@ -595,7 +597,7 @@ class ExportedState(object):
             # TODO use an interface here and move the check inside
             if isinstance(v, ExportedGetter):
                 if not k.startswith('get_'):
-                    # TODO factor out attribute name usage in Cell so this restriction is moot for non-settable cells
+                    # TODO factor out attribute name usage in PollingCell so this restriction is moot for non-settable cells
                     raise LookupError('Bad getter name', k)
                 else:
                     k = k[len('get_'):]
@@ -611,14 +613,14 @@ class ExportedState(object):
                 self.__decorator_cells_cache[k] = v.make_cell(self, k)
         return self.__decorator_cells_cache
     
-    def state_subscribe(self, callback, context):
+    def state_subscribe(self, subscriber, context):
         # pylint: disable=attribute-defined-outside-init, access-member-before-definition
         if self.__shape_subscriptions is None:
             self.__shape_subscriptions = set()
         if self.state_is_dynamic():
-            return _SimpleSubscription(callback, context, self.__shape_subscriptions)
+            return self.state(), _SimpleSubscription(subscriber, context, self.__shape_subscriptions)
         else:
-            return _NeverSubscription()
+            return self.state(), _NeverSubscription()
     
     def state__setter_called(self, setter_descriptor):
         """Called by ExportedSetter when the setter method is called."""
@@ -816,7 +818,7 @@ class IWritableCollection(Interface):
 
 
 def exported_value(parameter=None, **cell_kwargs):
-    """Returns a decorator for exported state; takes Cell's kwargs."""
+    """Returns a decorator for exported state; takes PollingCell's kwargs."""
     def decorator(f):
         return ExportedGetter(f, parameter, cell_kwargs)
     return decorator
@@ -864,12 +866,14 @@ class ExportedGetter(object):
             kwargs = kwargs.copy()
             kwargs['type'] = kwargs['type_fn'](obj)
             del kwargs['type_fn']
-        return Cell(obj, attr, writable=writable, **kwargs)
+        return PollingCell(obj, attr, writable=writable, **kwargs)
     
     def state_to_kwargs(self, value):
         # clunky: invoked by unserialize_exported_state via a type test
         if self.__parameter is not None:
             return {self.__parameter: self.__cell_kwargs['type'](value)}
+        else:
+            return None
 
 
 class ExportedSetter(object):
