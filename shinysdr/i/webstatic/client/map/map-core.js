@@ -47,6 +47,7 @@ define([
   shader_curves_f
 ) => {
   const {
+    pixelsFromWheelEvent,
     reveal,
   } = import_domtools;
   const {
@@ -110,7 +111,7 @@ define([
   // Moves as if the space is linear but can tolerate it not actually being.
   // Does not provide rotation or tilt.
   function TouchZoomHandler(targetElement, view, tapHandler) {
-    // TODO: This was derived from the touch handling in SpectrumView. Now that we've gener
+    // TODO: This was derived from the touch handling in SpectrumLayoutContext. Now that we've gener
     var activeTouches = Object.create(null);
     var touchCanBeTap = false;
     var stateAtStart = null;
@@ -176,7 +177,7 @@ define([
       var grabsY = [];
       var pansX = [];
       var pansY = [];
-      for (var idString in activeTouches) {
+      for (const idString in activeTouches) {
         var info = activeTouches[idString];
         grabsX.push(info.grabViewX - rect.width / 2);
         grabsY.push(info.grabViewY - rect.height / 2);
@@ -204,7 +205,7 @@ define([
       
       // Each time a touch goes away, lock in the current view mapping.
       stateAtStart = view.captureState();
-      for (var idString in activeTouches) {
+      for (const idString in activeTouches) {
         var info = activeTouches[idString];
        info.grabViewX = info.nowViewX;
        info.grabViewY = info.nowViewY;
@@ -265,10 +266,10 @@ define([
     mat[matInd(3, 3)] = 1;
   }
   function multMat(out, a, b) {
-    for (var i = 0; i < 4; i++) {
-      for (var j = 0; j < 4; j++) {
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 4; j++) {
         var sum = 0;
-        for (var k = 0; k < 4; k++) {
+        for (let k = 0; k < 4; k++) {
           sum += a[matInd(i, k)] * b[matInd(k, j)];
         }
         out[matInd(i, j)] = sum;
@@ -339,7 +340,7 @@ define([
         throw new Error('size must be a positive integer');
       }
       // Just find an arbitrary entry of adequate size.
-      for (var span of this._spans) {
+      for (const span of this._spans) {
         if (span.end - span.start >= size) {
           const remainderStart = span.start + size;
           this._removeFree(span);
@@ -763,7 +764,7 @@ define([
   expectedRenderedKeys['opacity'] = 1;
   Object.freeze(expectedRenderedKeys);
   function checkRendered(rendered) {
-    for (var key in rendered) {
+    for (const key in rendered) {
       if (!(key in expectedRenderedKeys)) {
         console.warn('Rendered feature: unexpected key: ' + key);
       }
@@ -1056,7 +1057,7 @@ define([
         },
         deallocateFeature: function (layerState, writeVertex, indexFreeList, feature, info) {
           var indices = info.allocatedIndices;
-          for (var i = 0; i < indices.length; i++) {
+          for (let i = 0; i < indices.length; i++) {
             var index = indices[i];
             writeVertex(index, 0, {}, {}, 'n', 'n', NO_PICKING_COLOR);
             writeVertex(index, 1, {}, {}, 'p', 'p', NO_PICKING_COLOR);
@@ -1092,9 +1093,9 @@ define([
         
           // In GeoJSON terms, polylines is a MultiLineString (but the coordinates are the general 'rendered' structure instead of lon-lat tuples.
           var lineStrings = rendered.polylines || [];
-          for (var lineStringIndex = 0; lineStringIndex < lineStrings.length; lineStringIndex++) {
+          for (let lineStringIndex = 0; lineStringIndex < lineStrings.length; lineStringIndex++) {
             var lineString = lineStrings[lineStringIndex];
-            for (var lineIndex = 0; lineIndex < lineString.length - 1; lineIndex++) {
+            for (let lineIndex = 0; lineIndex < lineString.length - 1; lineIndex++) {
               var bufferIndexIndex = bufferIndexAlloc++;
               var bufferIndex = allocatedIndices[bufferIndexIndex];
               if (bufferIndex === undefined) {
@@ -1253,14 +1254,14 @@ define([
       
         // pan and click
         // TOOD: duplicated code w/ other widgets, consider abstracting
-        targetElement.addEventListener('mousedown', function(downEvent) {
-          if (event.button !== 0) return;  // don't react to right-clicks etc.
+        targetElement.addEventListener('mousedown', downEvent => {
+          if (downEvent.button !== 0) return;  // don't react to right-clicks etc.
           downEvent.preventDefault();
           document.addEventListener('mousemove', drag, true);
           document.addEventListener('mouseup', function upTemp(upEvent) {
-            var delta = Math.hypot(upEvent.clientX - downEvent.clientX, upEvent.clientY - downEvent.clientY);
+            const delta = Math.hypot(upEvent.clientX - downEvent.clientX, upEvent.clientY - downEvent.clientY);
             if (delta < 5) {  // TODO justify slop
-              var featureInfo = pickFromMouseEvent(downEvent);
+              const featureInfo = pickFromMouseEvent(downEvent);
               if (featureInfo) {
                 featureInfo.clickOnFeature();
               }
@@ -1271,18 +1272,18 @@ define([
         }, false);
 
         // zoom
-        // TODO: mousewheel event is allegedly nonstandard and inconsistent among browsers, notably not in Firefox (not that we're currently FF-compatible due to the socket issue).
-        targetElement.addEventListener('mousewheel', function(event) {
-          var rect = targetElement.getBoundingClientRect();
-          var x = event.clientX - rect.left - rect.width / 2;
-          var y = event.clientY - rect.top - rect.height / 2;
+        targetElement.addEventListener('wheel', event => {
+          const [/* dx */, dy] = pixelsFromWheelEvent(event);
+          const rect = targetElement.getBoundingClientRect();
+          const x = event.clientX - rect.left - rect.width / 2;
+          const y = event.clientY - rect.top - rect.height / 2;
           viewChanger.setState(
             viewChanger.captureState(),
             -x,
             -y,
             x,
             y,
-            Math.exp(event.wheelDeltaY * 0.001));
+            Math.exp(-dy * 0.001));
       
           event.preventDefault();  // no scrolling
           event.stopPropagation();
@@ -1604,7 +1605,7 @@ define([
         const receivers = radio.receivers.depend(dirty);
         receivers._reshapeNotice.listen(dirty);
         const out = [];
-        for (var key in receivers) {
+        for (const key in receivers) {
           const receiver = receivers[key].depend(dirty);
           if (receiver.mode.depend(dirty) === filterMode) {
             out.push(receiver);

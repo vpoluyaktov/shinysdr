@@ -30,6 +30,7 @@ TODO explain how to link up with soundcard devices
 
 from __future__ import absolute_import, division, unicode_literals
 
+import random
 import re
 import subprocess
 import time
@@ -176,14 +177,14 @@ def _connect_to_daemon(reactor, host, port, server_name, proxy_ctor):
     defer.returnValue(proxy)
 
 
-def connect_to_rig(reactor, options=None, port=4532):
+def connect_to_rig(reactor, options=None, port=None):
     """
     Start a rigctld process and connect to it.
     
     options: list of rigctld options, e.g. ['-m', '123', '-r', '/dev/ttyUSB0'].
     Do not specify host or port in the options.
     
-    port: A free port number to use.
+    port: A known free port number to use, or None to attempt to pick one.
     """
     return _connect_to_device(
         reactor=reactor,
@@ -196,14 +197,14 @@ def connect_to_rig(reactor, options=None, port=4532):
 __all__.append('connect_to_rig')
 
 
-def connect_to_rotator(reactor, options=None, port=4533):
+def connect_to_rotator(reactor, options=None, port=None):
     """
     Start a rotctld process and connect to it.
     
     options: list of rotctld options, e.g. ['-m', '1102', '-r', '/dev/ttyUSB0'].
     Do not specify host or port in the options.
     
-    port: A free port number to use.
+    port: A known free port number to use, or None to attempt to pick one.
     """
     return _connect_to_device(
         reactor=reactor,
@@ -225,43 +226,66 @@ def _connect_to_device(reactor, options, port, daemon, connect_func):
     # We use rigctld instead of rigctl, because rigctl will only execute one command at a time and does not have the better-structured response formats.
     # If it were possible, we'd rather connect to rigctld over a pipe or unix-domain socket to avoid port allocation issues.
 
-    # Make sure that there isn't (as best we can check) something using the port already.
-    fake_connected = defer.Deferred()
-    reactor.connectTCP(host, port, _HamlibClientFactory('(probe) %s' % (daemon,), fake_connected))
-    try:
-        yield fake_connected
-        raise Exception('Something is already using port %i!' % port)
-    except ConnectionRefusedError:
-        pass
-    
-    process = subprocess.Popen(
-        args=['/usr/bin/env', daemon, '-T', host, '-t', str(port)] + options,
-        stdin=None,
-        stdout=None,
-        stderr=None,
-        close_fds=True)
-    
-    # Retry connecting with exponential backoff, because the daemon process won't tell us when it's started listening.
-    proxy_device = None
-    refused = Exception('this shouldn\'t be raised')
-    for i in xrange(0, 5):
+    if port is not None:
+        # Make sure that there isn't (as best we can check) something using the port already.
+        fake_connected = defer.Deferred()
+        reactor.connectTCP(host, port, _HamlibClientFactory('(probe) %s' % (daemon,), fake_connected))
         try:
-            proxy_device = yield connect_func(
-                reactor=reactor,
-                host=host,
-                port=port)
-            break
-        except ConnectionRefusedError as e:
-            refused = e
-            yield deferLater(reactor, 0.1 * (2 ** i), lambda: None)
-    else:
-        raise refused
+            yield fake_connected
+            raise Exception('Something is already using port %i!' % port)
+        except ConnectionRefusedError:
+            pass
     
-    # TODO: Sometimes we fail to kill the process because there was a protocol error during the connection stages. Refactor so that doesn't happen.
+    for _ in xrange(4 if port is None else 1):  # loop to try available port numbers in case of collision (hamlib will not bind to 0 and report)
+        
+        if port is None:
+            actual_port = random.randint(49152, 65535)
+        else:
+            actual_port = port
+        
+        process = subprocess.Popen(
+            args=['/usr/bin/env', daemon, '-T', host, '-t', str(actual_port)] + options,
+            stdin=None,
+            stdout=None,
+            stderr=None,
+            close_fds=True)
+    
+        # Retry connecting with exponential backoff, because the daemon process won't tell us when it's started listening.
+        proxy_device = None
+        refused = Exception('this shouldn\'t be raised')
+        for i in xrange(0, 4):
+            try:
+                proxy_device = yield connect_func(
+                    reactor=reactor,
+                    host=host,
+                    port=actual_port)
+                
+                break
+            except ConnectionRefusedError as e:
+                refused = e
+                if process.poll() is not None:
+                    # If the process has terminated already, then it is probably due to either a rig communication problem or due to a port number collision.
+                    break
+                yield deferLater(reactor, 0.1 * (2 ** i), lambda: None)
+        else:
+            raise refused
+        
+        if proxy_device is None:
+            # If we get here, then we aborted the loop by the process.poll() check.
+            continue
+        
+        # TODO: Sometimes we fail to kill the process because there was a protocol error during the connection stages. Refactor so that doesn't happen.
+        _install_closed_hook(proxy_device, process)    
+        
+        defer.returnValue(proxy_device)
+        break  # defer.returnValue exits by raise; this is just for lint
+    else:
+        raise Exception('Failed to start {}'.format(daemon))
+
+
+def _install_closed_hook(proxy_device, process):
     for proxy in proxy_device.get_components_dict().itervalues():  # only expect one, but CellDict is minimal for now
         proxy.when_closed().addCallback(lambda _: process.kill())
-    
-    defer.returnValue(proxy_device)
 
 
 @implementer(IComponent, IProxy)

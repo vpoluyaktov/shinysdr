@@ -58,6 +58,8 @@ def factorize(n):
 __all__.append('factorize')
 
 
+# pylint: disable=inconsistent-return-statements
+# (apparent false positive)
 def small_factor_at_least(n, limit, _force_approx=False):
     """
     Find a factor of 'n' which is at least 'limit' but not too much larger.
@@ -90,6 +92,7 @@ def small_factor_at_least(n, limit, _force_approx=False):
             if answer >= limit:
                 break
         return answer
+# pylint: enable=inconsistent-return-statements
 
 
 __all__.append('small_factor_at_least')

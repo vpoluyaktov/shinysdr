@@ -53,7 +53,7 @@ define([
       ctx[method](cx + pr*r * Math.sin(angle), cy - pr*r * Math.cos(angle));
     }
     
-    config.scheduler.start(function draw() {
+    config.scheduler.startNow(function draw() {
       var valueAngle = target.depend(draw);
       
       text.nodeValue = mod(valueAngle * RAD_TO_DEG, 360).toFixed(2) + '\u00B0';
@@ -71,7 +71,7 @@ define([
       // circle
       ctx.arc(cx, cy, r, 0, TAU, false);
       // ticks
-      for (var i = 0; i < 36; i++) {
+      for (let i = 0; i < 36; i++) {
         var t = TAU * i / 36;
         var d = i % 9 === 0 ? 3 :
                 i % 3 === 0 ? 2 :
