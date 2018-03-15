@@ -22,11 +22,14 @@ from __future__ import absolute_import, division, unicode_literals
 import bisect
 
 from twisted.internet import task, reactor as the_reactor
+from twisted.logger import Logger
 from zope.interface import implementer
 
-from shinysdr.values import BaseCell, ISubscription, StreamCell, SubscriptionContext
+from shinysdr.values import BaseCell, ISubscription, StreamCell, SubscriptionContext, never_subscription
 
 __all__ = []  # appended later
+
+_log = Logger()
 
 
 class Poller(object):
@@ -47,11 +50,14 @@ class Poller(object):
         if not isinstance(cell, BaseCell):
             # we're not actually against duck typing here; this is a sanity check
             raise TypeError('Poller given a non-cell %r' % (cell,))
-        if isinstance(cell, StreamCell):  # TODO kludge; use generic interface
-            target = _PollerStreamTarget(cell)
-        else:
-            target = _PollerValueTarget(cell)
-        return _PollerSubscription(self, target, subscriber, fast)
+        try:
+            if isinstance(cell, StreamCell):  # TODO kludge; use generic interface
+                target = _PollerStreamTarget(cell)
+            else:
+                target = _PollerValueTarget(cell)
+            return _PollerSubscription(self, target, subscriber, fast)
+        except _FailureToSubscribe:
+            return never_subscription
     
     def _add_subscription(self, target, subscription):
         self.__targets[subscription.fast].add(target, subscription)
@@ -137,10 +143,12 @@ class _PollerSubscription(object):
         self._poller._remove_subscription(self._target, self)
 
 
-class _PollerTarget(object):
-    def __init__(self, obj):
-        self._obj = obj
+class _PollerCellTarget(object):
+    def __init__(self, cell):
+        self._obj = cell  # TODO: rename to _cell for clarity
         self._subscriptions = []
+        self.__interest_token = object()
+        cell.interest_tracker.set(self.__interest_token, True)
     
     def __cmp__(self, other):
         return cmp(type(self), type(other)) or cmp(self._obj, other._obj)
@@ -153,28 +161,41 @@ class _PollerTarget(object):
         raise NotImplementedError()
     
     def unsubscribe(self):
-        pass
+        self._obj.interest_tracker.set(self.__interest_token, False)
 
 
-class _PollerValueTarget(_PollerTarget):
+class _PollerValueTarget(_PollerCellTarget):
     def __init__(self, cell):
-        _PollerTarget.__init__(self, cell)
-        self.__previous_value = self.__get()
+        _PollerCellTarget.__init__(self, cell)
+        try:
+            self.__previous_value = self.__get()
+        except Exception:
+            _log.failure("Exception in {cell}.get()", cell=cell)
+            self.unsubscribe()  # cancel effects of super __init__
+            raise _FailureToSubscribe()
+        self.__broken = False
 
     def __get(self):
         return self._obj.get()
 
     def poll(self, fire):
-        value = self.__get()
+        try:
+            value = self.__get()
+        except Exception:  # pylint: disable=broad-except
+            if not self.__broken:
+                _log.failure("Exception in {cell}.get()", cell=self._obj)
+            self.__broken = True
+            # TODO: Also feed this info out so callers can decide to give up / report failure to user
+            return
         if value != self.__previous_value:
             self.__previous_value = value
             fire(value)
 
 
-class _PollerStreamTarget(_PollerTarget):
+class _PollerStreamTarget(_PollerCellTarget):
     # TODO there are no tests for stream subscriptions
     def __init__(self, cell):
-        _PollerTarget.__init__(self, cell)
+        _PollerCellTarget.__init__(self, cell)
         self.__subscription = cell.subscribe_to_stream()
 
     def poll(self, fire):
@@ -245,6 +266,13 @@ class _SortedMultimap(object):
     
     def count_values(self):
         return self.__value_count
+
+
+class _FailureToSubscribe(Exception):
+    """Indicates that the cell being subscribed to failed to cooperate.
+    
+    Should not be observed outside of this module. Should not be logged; the original cause will already have been.
+    """
 
 
 # this is done last for load order

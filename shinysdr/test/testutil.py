@@ -41,7 +41,7 @@ from shinysdr.i.poller import Poller
 from shinysdr.interfaces import IDemodulator
 from shinysdr.signals import SignalType
 from shinysdr.types import RangeT
-from shinysdr.values import ExportedState, ISubscription, SubscriptionContext, nullExportedState
+from shinysdr.values import ExportedState, InterestTracker, ISubscription, SubscriptionContext, nullExportedState
 
 
 # --- Values/types/state test utilities
@@ -72,15 +72,24 @@ class SubscriptionTester(object):
 
 class CellSubscriptionTester(SubscriptionTester):
     """Subscribes to a single cell and checks the subscription's behavior."""
-    def __init__(self, cell):
+    def __init__(self, cell, interest_tracking=True):
         SubscriptionTester.__init__(self)
         self.cell = cell
+        self.__interest_tracking = interest_tracking
+        
         self.expected = []
         self.seen = []
         self.unsubscribed = False
         
+        if interest_tracking and not isinstance(cell.interest_tracker, LoopbackInterestTracker):
+            raise Exception('cell\'s interest_tracker must be a LoopbackInterestTracker or interest testing must be disabled')
+        
         gotten_value = cell.get()
+        if interest_tracking and cell.interest_tracker.interested:
+            raise Exception('interested true too soon')
         initial_value, self.subscription = cell.subscribe2(self.__subscriber, self.context)
+        if interest_tracking and not cell.interest_tracker.interested:
+            raise Exception('interested did not become true')
         verifyObject(ISubscription, self.subscription)
         if initial_value != gotten_value:
             raise Exception('claimed initial value {!r} did not match current get() value {!r}; this is not prohibited but likely a mistake if it occurs in tests'
@@ -114,6 +123,20 @@ class CellSubscriptionTester(SubscriptionTester):
         assert not self.unsubscribed
         self.subscription.unsubscribe()
         self.unsubscribed = True
+        if self.__interest_tracking and self.cell.interest_tracker.interested:
+            raise Exception('interested did not become false')
+
+
+class LoopbackInterestTracker(InterestTracker):
+    """Kludge for CellSubscriptionTester's convenience."""
+    
+    interested = False
+    
+    def __init__(self):
+        InterestTracker.__init__(self, self.__set)
+    
+    def __set(self, interested):
+        self.interested = interested
 
 
 # --- Radio test utilities ---
@@ -407,16 +430,18 @@ def assert_http_resource_properties(test_case, url):
         # If this fails, we probably made a mistake
         test_case.assertNotEqual(response.code, http.NOT_FOUND)
         
+        csp = response.headers.getRawHeaders(b'Content-Security-Policy')
+        test_case.assertEqual(1, len(csp))
         test_case.assertEqual(
-            [b';'.join([
+            [
                 b"default-src 'self' 'unsafe-inline'",
                 b"connect-src 'self' ws://*:* wss://*:*",
                 b"img-src 'self' data: blob:",
+                b"media-src http: https: file: blob:",
                 b"object-src 'none'",
                 b"base-uri 'self'",
-                b"block-all-mixed-content",
-            ])],
-            response.headers.getRawHeaders(b'Content-Security-Policy'))
+            ],
+            csp[0].split(b';'))
         test_case.assertEqual([b'no-referrer'], response.headers.getRawHeaders(b'Referrer-Policy'))
         test_case.assertEqual([b'nosniff'], response.headers.getRawHeaders(b'X-Content-Type-Options'))
         
