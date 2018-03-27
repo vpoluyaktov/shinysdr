@@ -1,4 +1,4 @@
-// Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
+// Copyright 2013, 2014, 2015, 2016, 2017, 2018 Kevin Reid <kpreid@switchb.org>
 // 
 // This file is part of ShinySDR.
 // 
@@ -135,10 +135,15 @@ define([
   function ReadCell(setter, /* initial */ value, metadata, transform) {
     Cell.call(this, metadata);
     
-    this._update = function(data) {
+    this._update = data => {
       value = transform(data);
       this.n.notify();
-    }.bind(this);
+    };
+    this._update.append = patchData => {
+      // TODO: very definitely does not work in general
+      value = value + transform(patchData);
+      this.n.notify();
+    };
     
     this.get = function() {
       return value;
@@ -156,37 +161,11 @@ define([
   RemoteCommandCell.prototype = Object.create(CommandCell.prototype, {constructor: {value: RemoteCommandCell}});
   //exports.CommandCell = CommandCell;  // not yet needed, params in flux, so not exported yet
   
-  function BulkDataCell(setter, initialValueJson, metadata) {
+  function BulkDataCell(setter, initialElementsJson, metadata) {
     let type = metadata.value_type;
     
-    let lastValue;
-    {
-      // Kludge because the server doesn't actually know how to deliver this properly in JSON, only binary.
-      const [info, packed_data] = initialValueJson;
-      if (Array.isArray(info) /* as opposed to object */) {
-        switch (type.dataFormat) {
-          case 'spectrum-byte': {
-            const offset = info[2];
-            const unpacked_data = new Float32Array(packed_data.length);
-            for (let i = packed_data.length - 1; i >= 0; i--) {
-              unpacked_data[i] = packed_data[i] - offset;
-            }
-            lastValue = [{freq: info[0], rate: info[1]}, unpacked_data];
-            break;
-          }
-          case 'scope-float': {
-            const rate = info[0];
-            const data = new Float32Array(packed_data);
-            lastValue = [{rate:rate}, data];
-            break;
-          }
-          default:
-            throw new Error('Unknown bulk data format');
-        }
-      } else {
-        lastValue = initialValueJson;
-      }
-    }
+    let currentElements = Array.prototype.map.call(initialElementsJson,
+        el => convertBulkDataElementJson(type, el));
 
     // kludge to ensure that widgets get all of the frames
     // TODO: put this on a more general and sound framework
@@ -194,54 +173,82 @@ define([
     
     // infoAndFFT is of the format [{freq:<number>, rate:<number>}, <Float32Array>]
     function transform(buffer) {
-      let newValue;
-      const view = new DataView(buffer);
-      // starts at 4 due to cell-ID field
-      switch (type.dataFormat) {
-        case 'spectrum-byte': {
-          const freq = view.getFloat64(4, true);
-          const rate = view.getFloat32(4+8, true);
-          const offset = view.getFloat32(4+8+4, true);
-          const packed_data = new Int8Array(buffer, 4+8+4+4);
-          const unpacked_data = new Float32Array(packed_data.length);
-          for (let i = packed_data.length - 1; i >= 0; i--) {
-            unpacked_data[i] = packed_data[i] - offset;
-          }
-          //console.log(id, freq, rate, data.length);
-          newValue = [{freq:freq, rate:rate}, unpacked_data];
-          break;
-        }
-        case 'scope-float': {
-          const rate = view.getFloat64(4+8, true);
-          const data = new Float32Array(buffer, 4+8);
-          newValue = [{rate:rate}, data];
-          break;
-        }
-        default:
-          throw new Error('Unknown bulk data format');
-      }
+      const newElement = convertBulkDataElementBinary(type, buffer);
+      currentElements = [newElement];
 
       // Deliver value
-      lastValue = newValue;
       // TODO replace this with something async
       for (let i = 0; i < subscriptions.length; i++) {
         const callbackWithoutThis = subscriptions[i];
-        callbackWithoutThis(newValue);
+        callbackWithoutThis(newElement);
       }
       
-      return newValue;
+      return currentElements;
     }
     
-    ReadCell.call(this, setter, lastValue, metadata, transform);
+    ReadCell.call(this, setter, currentElements, metadata, transform);
     
     this.subscribe = function(callback) {
       // TODO need to provide for unsubscribing
       subscriptions.push(callback);
-      callback(lastValue);
+      for (let element of currentElements) {
+        callback(element);
+      }
     };
   }
   BulkDataCell.prototype = Object.create(ReadCell.prototype, {constructor: {value: BulkDataCell}});
   exports.BulkDataCell = BulkDataCell;
+  
+  function convertBulkDataElementJson(type, valueJson) {
+    // Kludge because the server doesn't actually know how to deliver this properly in JSON, only binary, so we get a plain array of numbers.
+    const [info, packed_data] = valueJson;
+    if (!Array.isArray(info)) {
+      throw new Error('convertBulkDataElementJson oops ' + info);
+    }
+    switch (type.dataFormat) {
+      case 'spectrum-byte': {
+        const offset = info[2];
+        const unpacked_data = new Float32Array(packed_data.length);
+        for (let i = packed_data.length - 1; i >= 0; i--) {
+          unpacked_data[i] = packed_data[i] - offset;
+        }
+        return [{freq: info[0], rate: info[1]}, unpacked_data];
+      }
+      case 'scope-float': {
+        const rate = info[0];
+        const data = new Float32Array(packed_data);
+        return [{rate:rate}, data];
+      }
+      default:
+        throw new Error('convertBulkDataElementJson: Unknown bulk data format');
+    }
+  }
+  
+  function convertBulkDataElementBinary(type, buffer) {
+    const view = new DataView(buffer);
+    // starts at 4 due to cell-ID field
+    switch (type.dataFormat) {
+      case 'spectrum-byte': {
+        const freq = view.getFloat64(4, true);
+        const rate = view.getFloat32(4+8, true);
+        const offset = view.getFloat32(4+8+4, true);
+        const packed_data = new Int8Array(buffer, 4+8+4+4);
+        const unpacked_data = new Float32Array(packed_data.length);
+        for (let i = packed_data.length - 1; i >= 0; i--) {
+          unpacked_data[i] = packed_data[i] - offset;
+        }
+        //console.log(id, freq, rate, data.length);
+        return [{freq:freq, rate:rate}, unpacked_data];
+      }
+      case 'scope-float': {
+        const rate = view.getFloat64(4+8, true);
+        const data = new Float32Array(buffer, 4+8);
+        return [{rate:rate}, data];
+      }
+      default:
+        throw new Error('convertBulkDataElementBinary: Unknown bulk data format');
+    }
+  }
   
   function setNonEnum(o, p, v) {
     Object.defineProperty(o, p, {
@@ -250,26 +257,16 @@ define([
     });
   }
   
-  function openWebSocket(wsURL) {
-    // TODO: Have server deliver websocket URL, remove port number requirement
-    var ws = new WebSocket(wsURL);
-    ws.addEventListener('open', function (event) {
-      ws.send(''); // dummy required due to server limitation
-    }, true);
-    return ws;
-  }
-  
   const minRetryTime = 1000;
   const maxRetryTime = 20000;
   const backoff = 1.05;
-  function retryingConnection(wsURLFunc, connectionStateCallback, callback) {
+  function retryingConnection(attemptFn, connectionStateCallback, callback) {
     if (!connectionStateCallback) connectionStateCallback = function () {};
 
     var timeout = minRetryTime;
     var succeeded = false;
     function go() {
-      const wsURL = wsURLFunc();
-      const ws = openWebSocket(wsURL);
+      const ws = attemptFn();
       ws.addEventListener('open', function (event) {
         succeeded = true;
         timeout = minRetryTime;
@@ -277,7 +274,7 @@ define([
       }, true);
       ws.addEventListener('close', function (event) {
         if (succeeded) {
-          console.error('Lost WebSocket connection', wsURL, '- reason given:', event.reason);
+          console.error('Lost WebSocket connection; reason given:', event.reason);
           connectionStateCallback('disconnected');
         } else {
           timeout = Math.min(maxRetryTime, timeout * backoff);
@@ -315,7 +312,7 @@ define([
   }
   
   // TODO: too many args, figure out an object that is a sensible bundle
-  function makeCell(url, setter, id, desc, idMap) {
+  function makeCell(url, setter, id, desc, initialValue, idMap) {
     const type = typeFromDesc(desc.metadata.value_type);
     const metadata = {
       value_type: type,
@@ -324,19 +321,18 @@ define([
     };
     var cell;
     if (type === blockT) {
-      // TODO eliminate special case by making server block cells less special?
+      // TODO eliminate bogus initial value by adding server support for reference initial values
       // TODO blocks should not need urls (switch http op to websocket)
-      cell = new ReadCell(setter, /* dummy */ makeBlock(url, []), metadata,
-        function (id) { return idMap[id]; });
+      cell = new ReadCell(setter, /* dummy */ makeBlock(url, []), metadata, id => idMap[id]);
     } else if (type instanceof BulkDataT) {
       // TODO can we eliminate this special case
-      cell = new BulkDataCell(setter, desc.current, metadata);
+      cell = new BulkDataCell(setter, initialValue, metadata);
     } else if (desc.type === 'command_cell') {
       cell = new RemoteCommandCell(setter, metadata);
     } else if (desc.writable) {
-      cell = new ReadWriteCell(setter, desc.current, metadata);
+      cell = new ReadWriteCell(setter, initialValue, metadata);
     } else {
-      cell = new ReadCell(setter, desc.current, metadata, identity);
+      cell = new ReadCell(setter, initialValue, metadata, identity);
     }
     return [cell, cell._update];
   }
@@ -347,7 +343,11 @@ define([
     
     const rootCell = new ReadCell(null, null, blockT, identity);
     
-    retryingConnection(() => rootURL, connectionStateCallback, ws => {
+    retryingConnection(() => new WebSocket(rootURL), connectionStateCallback, ws => {
+      ws.addEventListener('open', event => {
+        ws.send('');  // dummy required due to server limitation
+      }, true);
+
       ws.binaryType = 'arraybuffer';
 
       // indexed by object ids chosen by server
@@ -363,26 +363,24 @@ define([
       isCellMap[0] = true;
       
       function oneMessage(message) {
-        const op = message[0];
-        const id = message[1];
+        const [op, id] = message;
+        // console.log(...message);
         switch (op) {
           case 'register_block': {
-            const url = message[2];
-            const interfaces = message[3];
+            const [,, url, interfaces] = message;
             updaterMap[id] = idMap[id] = makeBlock(url, interfaces);
             isCellMap[id] = false;
             break;
           }
           case 'register_cell': {
-            const url = message[2];
-            const desc = message[3];
+            const [,, url, desc, initialValue] = message;
             const pair = (function () {
               function setter(value, callback) {
                 var cbid = nextCallbackId++;
                 callbackMap[cbid] = callback;
                 ws.send(JSON.stringify(['set', id, value, cbid]));
               }
-              return makeCell(url, setter, id, desc, idMap);
+              return makeCell(url, setter, id, desc, initialValue, idMap);
             }());
             idMap[id] = pair[0];
             updaterMap[id] = pair[1];
@@ -390,7 +388,7 @@ define([
             break;
           }
           case 'value': {
-            const value = message[2];
+            const [,, value] = message;
             if (!(id in idMap)) {
               console.error('Undefined id in state stream message', message);
               return;
@@ -407,6 +405,19 @@ define([
               }
               block._reshapeNotice.notify();
             }
+            break;
+          }
+          case 'value_append': {
+            const [,, patch] = message;
+            if (!(id in idMap)) {
+              console.error('Undefined id in state stream message', message);
+              return;
+            }
+            if (!isCellMap[id]) {
+              console.error('invalid value_append', message);
+              return;
+            }
+            updaterMap[id].append(patch);
             break;
           }
           case 'delete': {
@@ -431,6 +442,7 @@ define([
         var view = new DataView(buffer);
         var id = view.getUint32(0, true);
         var cell_updater = updaterMap[id];
+        // TODO: should go through the 'append' path but that is not properly generalized yet
         cell_updater(buffer);
       }
       

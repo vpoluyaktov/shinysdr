@@ -1,4 +1,4 @@
-# Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
+# Copyright 2013, 2014, 2015, 2016, 2017, 2018 Kevin Reid <kpreid@switchb.org>
 # 
 # This file is part of ShinySDR.
 # 
@@ -22,18 +22,15 @@
 
 from __future__ import absolute_import, division, unicode_literals
 
-import array
+import codecs
 from collections import namedtuple
-import struct
 import weakref
 
 from twisted.python import log
 from zope.interface import Interface, implementer  # available via Twisted
 
-from gnuradio import gr
-
 from shinysdr.gr_ext import safe_delete_head_nowait
-from shinysdr.types import BulkDataT, EnumRow, ReferenceT, to_value_type
+from shinysdr.types import BulkDataElement, BulkDataT, EnumRow, ReferenceT, to_value_type
 
 
 class CellMetadata(namedtuple('CellMetadata', [
@@ -83,6 +80,25 @@ class ISubscriber(Interface):
         """Be notified of a newer value.
         
         Beware that the value supplied is _not_ necessarily the most current value; it may be obsolete by the time this notification is delivered.
+        """
+
+
+class IDeltaSubscriber(ISubscriber):
+    """Interface for subscribing to cells whose value can be partially updated.
+    
+    The exact meaning of partial updating is not defined by this interface; it is expected that the cell's value type will provide a suitable definition.
+    """
+    
+    def append(patch):
+        """Append this patch to the previously reported/accumulated value.
+        
+        This operation should be used for newly-arriving data.
+        """
+    
+    def prepend(patch):
+        """Prepend this patch to the previously reported/accumulated value.
+        
+        This operation should be used for backfilling old data. The subscriber may ignore it entirely if it already has enough history.
         """
 
 
@@ -207,7 +223,7 @@ class BaseCell(object):
         # TODO: 'subscribe2' name is temporary for easy distinguishing this from other 'subscribe' protocols.
         """Request to be notified when this cell's value changes.
         
-        subscriber: an ISubscriber; called repeatedly with successive new cell values; never immediately.
+        subscriber: an ISubscriber (not necessarily explicitly) and optionally an IDeltaSubscriber; called repeatedly with successive new cell values; never immediately.
         context: a SubscriptionContext.
 
         Returns a tuple of the current value and an ISubscription, which has an `unsubscribe` method which will remove the subscription.
@@ -232,14 +248,11 @@ class ValueCell(BaseCell):
         BaseCell.__init__(self, type=type, **kwargs)
     
     def description(self):
-        d = {
+        return {
             u'type': u'value_cell',
             u'metadata': self.metadata(),
             u'writable': self.isWritable()
         }
-        if not self.type().is_reference():  # TODO kludge
-            d[u'current'] = self.get()
-        return d
 
 
 # The possible values of the 'changes' parameter to a cell of type PollingCell, which determine when the cell's getter is polled to check for changes.
@@ -300,7 +313,7 @@ class PollingCell(TargetingMixin, ValueCell):
         value = self.__getter()
         if self.type().is_reference():
             # informative-failure debugging aid
-            assert isinstance(value, ExportedState), (self._target, self._key)
+            assert isinstance(value, ExportedState), ('Reference value was not an ExportedState', self._target, self._key)
         return value
     
     def set(self, value):
@@ -335,96 +348,123 @@ class PollingCell(TargetingMixin, ValueCell):
             self.poll_for_change(specific_cell=True)
 
 
-class _MessageSplitter(object):
-    """Wraps a gr.msg_queue, whose arg1 and arg2 are as in blocks.message_sink, to allow extracting one data item at a time by polling."""
-    def __init__(self, queue, info_getter, close, type):
-        """
-        queue: a gr.msg_queue
-        info_getter: function () -> anything; returned with data
-        close: function () -> None; provided as a method
-        type: a BulkDataT
-        """
-        # config
-        self.__queue = queue
-        self.__igetter = info_getter
-        self.__type = type
-        self.close = close  # provided as method
-        
-        # state
-        self.__splitting = None
+class GRMsgQueueCell(ValueCell):
+    """A cell which consumes a gr.msg_queue, with items in the format blocks.message_sink generates, and provides its contents as the streaming cell value.
     
-    def get(self, binary=False):
-        if self.__splitting is not None:
-            (string, itemsize, count, index) = self.__splitting
-        else:
-            queue = self.__queue
-            # we would use .delete_head_nowait() but it returns a crashy wrapper instead of a sensible value like None. So implement a test (which is safe as long as we're the only reader)
-            message = safe_delete_head_nowait(queue)
-            if not message:
-                return None
-            string = message.to_string()
-            itemsize = int(message.arg1())
-            count = int(message.arg2())
-            index = 0
-        assert index < count
-        
-        # update state
-        if index == count - 1:
-            self.__splitting = None
-        else:
-            self.__splitting = (string, itemsize, count, index + 1)
-        
-        # extract value
-        # TODO: this should be a separate concern, refactor
-        item_string = string[itemsize * index:itemsize * (index + 1)]
-        if binary:
-            # In binary mode, pack info with already-binary data.
-            value = struct.pack(self.__type.get_info_format(), *self.__igetter()) + item_string
-        else:
-            # In python-value mode, unpack binary data.
-            unpacker = array.array(self.__type.get_array_format())
-            unpacker.fromstring(item_string)
-            value = (self.__igetter(), unpacker.tolist())
-        return value
-
-
-class StreamCell(ValueCell, TargetingMixin):
-    def __init__(self, target, key, type, **kwargs):
-        assert isinstance(type, BulkDataT)
-        TargetingMixin.__init__(self, target, key)
+    Abstract; use ElementQueueCell or StringQueueCell directly.
+    """
+    
+    def __init__(self,
+            queue,
+            type,
+            info_getter=lambda: None,
+            **kwargs):
+        if not (type == unicode or isinstance(type, BulkDataT)):
+            raise ValueError('Unsupported type for GRMsgQueueCell {}'.format(type))
         ValueCell.__init__(self,
             type=type,
             writable=False,
             persists=False,
-            associated_key=key,
             **kwargs)
-        self.__dgetter = getattr(self._target, 'get_' + key + '_distributor')
-        self.__igetter = getattr(self._target, 'get_' + key + '_info')
-    
-    def subscribe2(self, subscriber, context):
-        # poller does StreamCell-specific things. TODO: make Poller uninvolved
-        return self.get(), context.poller.subscribe(self, subscriber, fast=True)
-    
-    # TODO: eliminate this specialized protocol used by Poller
-    def subscribe_to_stream(self):
-        queue = gr.msg_queue()
-        self.__dgetter().subscribe(queue)
         
-        def close():
-            self.__dgetter().unsubscribe(queue)
-        
-        return _MessageSplitter(queue, self.__igetter, close, self.type())
+        # parameters
+        self.__queue = queue
+        self.__info_getter = info_getter
     
     def get(self):
-        """Return the most recent item in the stream."""
-        # TODO: Duplicated code with _MessageSplitter.get.
-        item_string = self.__dgetter().get()
-        unpacker = array.array(self.type().get_array_format())
-        unpacker.fromstring(item_string)
-        return (self.__igetter(), unpacker.tolist())
+        # still abstract
+        raise NotImplementedError(self)
     
     def set(self, value):
-        raise Exception('StreamCell is not writable.')
+        """implement abstract"""
+        # TODO: There should be a standard exception to raise, or base class should do it for us
+        raise Exception('Not writable')
+    
+    def subscribe2(self, subscriber, context):
+        """implement abstract"""
+        return self.get(), context.poller.subscribe(self, subscriber, fast=True, delegate_polling_to_me=True)
+    
+    def _deliver_message(self, grmessage, info, fire):
+        """Implement this method to handle the gr.message objects from the queue."""
+        raise NotImplementedError(self)
+    
+    def _poll_from_poller(self, fire):
+        """Extract all items currently in the queue and deliver them."""
+        got_info = False
+        latest_info = None
+        while True:
+            message = safe_delete_head_nowait(self.__queue)
+            if not message:
+                break
+            if not got_info:
+                got_info = True
+                latest_info = self.__info_getter()
+            self._deliver_message(message, latest_info, fire)
+
+
+class ElementQueueCell(GRMsgQueueCell):
+    def __init__(self,
+            queue,
+            type,
+            history_length=32,
+            **kwargs):
+        assert isinstance(type, BulkDataT)
+        GRMsgQueueCell.__init__(self,
+            queue=queue,
+            type=type,
+            **kwargs)
+        
+        self.__history_length = history_length
+        self.__latest = []  # caution, mutable
+    
+    def get(self):
+        """implement abstract"""
+        return self.__latest[:]
+    
+    def _deliver_message(self, grmessage, info, fire):
+        string = grmessage.to_string()
+        itemsize = int(grmessage.arg1())
+        count = int(grmessage.arg2())
+        if not count: return
+        
+        parsed_items = []
+        for index in xrange(count):
+            # extract value
+            item_string = string[itemsize * index:itemsize * (index + 1)]
+            parsed_items.append(BulkDataElement(
+                data=item_string,
+                info=info))
+        
+        self.__latest.extend(parsed_items)
+        self.__latest[:-self.__history_length] = []
+        
+        fire.append(parsed_items)
+
+
+class StringQueueCell(GRMsgQueueCell):
+    def __init__(self,
+            queue,
+            encoding,
+            history_length=1000,
+            **kwargs):
+        GRMsgQueueCell.__init__(self,
+            queue=queue,
+            type=unicode,
+            **kwargs)
+        
+        self.__history_length = history_length
+        self.__decoder = codecs.getincrementaldecoder(encoding)(errors='replace')
+        self.__latest = ''
+    
+    def get(self):
+        """implement abstract"""
+        return self.__latest
+    
+    def _deliver_message(self, grmessage, info, fire):
+        message_string = self.__decoder.decode(grmessage.to_string())
+        if message_string:
+            self.__latest = (self.__latest + message_string)[-self.__history_length:]
+            fire.append(message_string)
 
 
 class LooseCell(ValueCell):
@@ -580,7 +620,6 @@ class Command(BaseCell):
             u'type': 'command_cell',
             u'metadata': self.metadata(),
             u'writable': self.isWritable(),
-            u'current': self.get(),
         }
     
     def get(self):

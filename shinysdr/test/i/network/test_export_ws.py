@@ -1,4 +1,4 @@
-# Copyright 2013, 2014, 2015, 2016, 2017 Kevin Reid <kpreid@switchb.org>
+# Copyright 2013, 2014, 2015, 2016, 2017, 2018 Kevin Reid <kpreid@switchb.org>
 # 
 # This file is part of ShinySDR.
 # 
@@ -33,9 +33,9 @@ from shinysdr.i.json import transform_for_json
 from shinysdr.i.network.export_ws import StateStreamInner, OurStreamProtocol
 from shinysdr.i.roots import CapTable, IEntryPoint
 from shinysdr.signals import SignalType
-from shinysdr.test.testutil import SubscriptionTester
+from shinysdr.test.testutil import Cells, SubscriptionTester
 from shinysdr.types import BulkDataT, ReferenceT
-from shinysdr.values import CellDict, CollectionState, ExportedState, NullExportedState, StreamCell, SubscriptionContext, exported_value, nullExportedState, setter
+from shinysdr.values import CellDict, CollectionState, ExportedState, ElementQueueCell, NullExportedState, StringQueueCell, SubscriptionContext, exported_value, nullExportedState, setter
 
 
 class StateStreamTestCase(unittest.TestCase):
@@ -69,11 +69,13 @@ class StateStreamTestCase(unittest.TestCase):
 
 
 class TestStateStream(StateStreamTestCase):
+    maxDiff = 4000
+    
     def test_init_and_mutate(self):
         self.setUpForObject(StateSpecimen())
         self.assertEqual(self.getUpdates(), transform_for_json([
             ['register_block', 1, 'urlroot', ['shinysdr.test.i.network.test_export_ws.IFoo']],
-            ['register_cell', 2, 'urlroot/rw', self.object.state()['rw'].description()],
+            ['register_cell', 2, 'urlroot/rw', self.object.state()['rw'].description(), 1.0],
             ['value', 1, {'rw': 2}],
             ['value', 0, 1],
         ]))
@@ -88,11 +90,11 @@ class TestStateStream(StateStreamTestCase):
         self.setUpForObject(DuplicateReferenceSpecimen())
         self.assertEqual(self.getUpdates(), transform_for_json([
             [u'register_block', 1, u'urlroot', []],
-            [u'register_cell', 2, u'urlroot/foo', self.object.state()['foo'].description()],
+            [u'register_cell', 2, u'urlroot/foo', self.object.state()['foo'].description(), None],
             [u'register_block', 3, u'urlroot/foo', [u'shinysdr.values.INull']],
             [u'value', 3, {}],
             [u'value', 2, 3],
-            [u'register_cell', 4, u'urlroot/bar', self.object.state()['bar'].description()],
+            [u'register_cell', 4, u'urlroot/bar', self.object.state()['bar'].description(), None],
             [u'value', 4, 3],
             [u'value', 1, {u'bar': 4, u'foo': 2}],
             [u'value', 0, 1],
@@ -120,7 +122,7 @@ class TestStateStream(StateStreamTestCase):
         
         self.assertEqual(self.getUpdates(), transform_for_json([
             ['register_block', 1, 'urlroot', []],
-            ['register_cell', 2, 'urlroot/a', self.object.state()['a'].description()],
+            ['register_cell', 2, 'urlroot/a', self.object.state()['a'].description(), None],
             ['register_block', 3, 'urlroot/a', []],
             ['value', 3, {}],
             ['value', 2, 3],
@@ -138,7 +140,7 @@ class TestStateStream(StateStreamTestCase):
     def test_send_set_normal(self):
         self.setUpForObject(StateSpecimen())
         self.assertIn(
-            transform_for_json(['register_cell', 2, 'urlroot/rw', self.object.state()['rw'].description()]),
+            transform_for_json(['register_cell', 2, 'urlroot/rw', self.object.state()['rw'].description(), 1.0]),
             self.getUpdates())
         self.stream.dataReceived(json.dumps(['set', 2, 100.0, 1234]))
         self.assertEqual(self.getUpdates(), [
@@ -171,18 +173,54 @@ class TestStateStream(StateStreamTestCase):
             self.stream.dataReceived(json.dumps(['set', 99999, 100.0, 1234])))
         self.assertEqual(self.getUpdates(), [])
     
-    def test_stream_cell(self):
-        self.setUpForObject(StreamCellSpecimen())
+    def test_bulk_data(self):
+        self.setUpForObject(BulkDataSpecimen())
+        cell = self.object.state()['s']
+        self.object.queue.insert_tail(make_bytes_msg(b'ab'))
+        
+        # TODO: do this once initial values are processed correctly rather than having extra get()s
+        # poll cell to force queue contents to show up in initial state to test json representation
+        # st = SubscriptionTester()
+        # _, subscription = cell.subscribe2(lambda v: None, st.context)
+        # st.advance()
+        # subscription.unsubscribe()
+        
+        description = cell.description()
         self.assertEqual(self.getUpdates(), transform_for_json([
             [u'register_block', 1, u'urlroot', []],
-            [u'register_cell', 2, u'urlroot/s', self.object.state()['s'].description()],
+            [u'register_cell', 2, u'urlroot/s', description, []],
             [u'value', 1, {u's': 2}],
             [u'value', 0, 1],
+            ['actually_binary', b'\x02\x00\x00\x00\x01a'],
+            ['actually_binary', b'\x02\x00\x00\x00\x01b'],
         ]))
-        self.object.queue.insert_tail(gr.message().make_from_string(b'qu', 0, 1, len('qu')))
+        self.object.queue.insert_tail(make_bytes_msg(b'cd'))
         self.assertEqual(self.getUpdates(), transform_for_json([
-            ['actually_binary', b'\x02\x00\x00\x00q'],
-            ['actually_binary', b'\x02\x00\x00\x00u'],
+            ['actually_binary', b'\x02\x00\x00\x00\x02c'],
+            ['actually_binary', b'\x02\x00\x00\x00\x02d'],
+        ]))
+    
+    def test_value_patch(self):
+        queue = gr.msg_queue()
+        queue.insert_tail(make_bytes_msg(b'ab'))
+        cell = StringQueueCell(
+            queue=queue,
+            encoding='us-ascii')
+        self.setUpForObject(Cells({
+            's': cell
+        }))
+        self.st.advance()
+        self.assertEqual(self.getUpdates(), transform_for_json([
+            ['register_block', 1, 'urlroot', []],
+            ['register_cell', 2, 'urlroot/s', cell.description(), ''],  # TODO should have initial value
+            ['value', 1, {'s': 2}],
+            ['value', 0, 1],
+            ['value_append', 2, 'ab'],
+        ]))
+        queue.insert_tail(make_bytes_msg(b'cd'))
+        self.st.advance()
+        self.assertEqual(self.getUpdates(), transform_for_json([
+            ['value_append', 2, 'cd'],
         ]))
 
 
@@ -221,33 +259,26 @@ class DuplicateReferenceSpecimen(ExportedState):
         return self.bar
 
 
-class StreamCellSpecimen(ExportedState):
+class BulkDataSpecimen(ExportedState):
     """Helper for TestStateStream"""
     
     def __init__(self):
-        self.queue = None
+        self.queue = gr.msg_queue()
+        self.info_value = 0
     
     def state_def(self):
-        yield 's', StreamCell(self, 's', type=BulkDataT('', 'b'))
-    
-    def get_s_distributor(self):
-        return self  # shortcut
-    
-    def get_s_info(self):
-        return ()
-    
-    def subscribe(self, queue):
-        # acting as distributor
-        self.queue = queue
-    
-    def unsubscribe(self, queue):
-        # acting as distributor
-        assert self.queue == queue
-        self.queue = None
-    
-    def get(self):
-        # acting as distributor
-        return u'gotten'
+        def info_getter():
+            self.info_value += 1
+            return (self.info_value,)
+        yield 's', ElementQueueCell(
+            queue=self.queue,
+            info_getter=info_getter,
+            type=BulkDataT('b', 'b'))
+
+
+def make_bytes_msg(s):
+    assert isinstance(s, str)
+    return gr.message().make_from_string(s, 0, 1, len(s))
 
 
 class TestSerialization(StateStreamTestCase):
